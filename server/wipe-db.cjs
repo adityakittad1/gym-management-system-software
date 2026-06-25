@@ -15,7 +15,9 @@ async function wipe() {
       'members',
       'expenses',
       'visitors',
-      'leads'
+      'leads',
+      'whatsapp_logs',
+      'trainers'
     ];
     
     // TRUNCATE with CASCADE to handle foreign key dependencies automatically
