@@ -190,7 +190,7 @@ export default function WhatsAppReminders() {
 
   const handleSendTest = async () => {
     if (!testPhone) {
-      showToast('Enter a phone number for the test message', 'error');
+      showToast('Enter a phone number for the verification ping', 'error');
       return;
     }
     setSendingTest(true);
@@ -199,7 +199,7 @@ export default function WhatsAppReminders() {
       showToast(res.message, 'success');
       await fetchLogs();
     } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : 'Test message failed', 'error');
+      showToast(err instanceof Error ? err.message : 'Verification ping failed', 'error');
     } finally {
       setSendingTest(false);
     }
@@ -431,7 +431,7 @@ export default function WhatsAppReminders() {
                   <Send className="w-5 h-5 text-amber-400" />
                 </div>
                 <div>
-                  <h2 className="text-white font-bold">Send Test Message</h2>
+                  <h2 className="text-white font-bold">Send Verification Ping</h2>
                   <p className="text-zinc-500 text-xs">Verify your connection is working</p>
                 </div>
               </div>
@@ -439,12 +439,12 @@ export default function WhatsAppReminders() {
               {!connected && (
                 <div className="flex items-start gap-3 bg-amber-400/10 border border-amber-400/20 rounded-xl p-3">
                   <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-amber-400 text-xs">Connect your WhatsApp API first before sending test messages</p>
+                  <p className="text-amber-400 text-xs">Connect your WhatsApp API first before sending verification pings</p>
                 </div>
               )}
 
               <div>
-                <label className="text-zinc-400 text-xs font-medium block mb-2">Test Phone Number</label>
+                <label className="text-zinc-400 text-xs font-medium block mb-2">Verification Phone Number</label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
                   <input
@@ -463,7 +463,7 @@ export default function WhatsAppReminders() {
                 className="w-full flex items-center justify-center gap-2 py-3 bg-green-500 text-white rounded-xl font-bold text-sm hover:bg-green-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-green-500/20"
               >
                 {sendingTest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                {sendingTest ? 'Sending Test…' : 'Send Test Message'}
+                {sendingTest ? 'Sending Ping…' : 'Send Verification Ping'}
               </button>
             </div>
 

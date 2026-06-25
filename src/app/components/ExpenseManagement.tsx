@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Wallet, Plus, Search, Filter, ArrowDownRight,
   MoreVertical, Edit2, Trash2, Tag, Calendar, FileText, CheckCircle
@@ -8,6 +8,7 @@ import {
   Tooltip, ResponsiveContainer
 } from 'recharts';
 import { api, Expense } from '../services/api';
+import { useRealtimeAnalytics } from '../hooks/useRealtimeAnalytics';
 import { toast } from 'sonner';
 
 const EXPENSE_CATEGORIES = [
@@ -16,9 +17,12 @@ const EXPENSE_CATEGORIES = [
 ];
 
 export default function ExpenseManagement() {
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [summary, setSummary] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data: expensesData, isLoading: expensesLoading } = useRealtimeAnalytics(api.expenses.list, []);
+  const { data: summary, isLoading: summaryLoading } = useRealtimeAnalytics(api.analytics.getExpenses, null);
+  
+  const expenses = expensesData || [];
+  const isLoading = expensesLoading || summaryLoading;
+  
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [formData, setFormData] = useState({
@@ -27,26 +31,6 @@ export default function ExpenseManagement() {
     date: new Date().toISOString().split('T')[0],
     notes: ''
   });
-
-  const fetchData = async () => {
-    try {
-      setIsLoading(true);
-      const [expData, sumData] = await Promise.all([
-        api.expenses.list(),
-        api.expenses.getSummary()
-      ]);
-      setExpenses(expData);
-      setSummary(sumData);
-    } catch (err) {
-      toast.error('Failed to load expenses');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +53,7 @@ export default function ExpenseManagement() {
       }
       setShowAddModal(false);
       setFormData({ category: 'Rent', amount: '', date: new Date().toISOString().split('T')[0], notes: '' });
-      fetchData();
+      // Realtime subscription handles refetching automatically
     } catch (err) {
       toast.error('Failed to save expense');
     }
@@ -80,7 +64,7 @@ export default function ExpenseManagement() {
     try {
       await api.expenses.delete(id);
       toast.success('Expense deleted');
-      fetchData();
+      // Realtime handles refetch
     } catch (err) {
       toast.error('Failed to delete expense');
     }

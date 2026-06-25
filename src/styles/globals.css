@@ -330,21 +330,43 @@
     --card-foreground: #000000 !important;
     --border: #e5e5e5 !important;
   }
-  body, .page-container {
+  body {
     background: #ffffff !important;
     color: #000000 !important;
   }
-  header, nav, aside {
+  .print-hide, nav, aside {
     display: none !important;
   }
-  .glass-card {
-    border: 1px solid #e5e5e5 !important;
-    box-shadow: none !important;
-    background: #ffffff !important;
-    color: #000000 !important;
+  .print-only, .print-only * {
+    visibility: visible !important;
+    color: #000 !important;
+  }
+  .print-only {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: white;
+  }
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+  }
+  .print-table th, .print-table td {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: left;
+    font-size: 12px;
+  }
+  .print-table th {
+    background: #eee !important;
+    font-weight: bold;
+    -webkit-print-color-adjust: exact;
   }
   * {
-    color: #000000 !important;
     box-shadow: none !important;
     text-shadow: none !important;
   }

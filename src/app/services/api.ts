@@ -7,6 +7,9 @@
  */
 
 import { supabase } from './supabase';
+import { TABLES, VIEWS, SELECTS } from './db-schema';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
@@ -83,14 +86,19 @@ export interface Trainer {
 }
 
 export interface AttendanceRecord {
-  id: number;
+  id: string | number;
   memberName: string;
-  memberId: number;
+  memberId: string | number;
+  memberPhone?: string;
   checkInTime: string;
   checkOutTime?: string;
   status: 'present' | 'absent' | 'late';
   date: string;
-  attendanceMethod?: string;
+  method?: string;
+  remarks?: string;
+  markedBy?: string;
+  plan?: string;
+  coach?: string;
 }
 
 export interface NotificationRecord {
@@ -115,6 +123,8 @@ export interface DashboardStats {
   expiredMembers: number;
   expiringSoon: number;
   monthlyRevenue: number;
+  monthlyExpenses: number;
+  netProfit: number;
   pendingPayments: number;
   attendanceToday: number;
   totalTrainers: number;
@@ -133,7 +143,11 @@ export interface Expense {
   amount: number;
   month: number;
   year: number;
+  expenseDate?: string;   // YYYY-MM-DD
+  vendor?: string;
+  paymentMethod?: string;
   notes?: string;
+  description?: string;
   createdAt: string;
 }
 
@@ -314,40 +328,27 @@ export const api = {
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   auth: {
-    /**
-     * Staff/Admin login via Supabase Auth email+password.
-     * Returns a User loaded from the profiles table.
-     */
     login: async (credentials: { email: string; password?: string }) => {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: credentials.email,
         password: credentials.password || '',
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          throw new Error('Invalid email or password');
+        }
+        throw new Error(error.message);
+      }
 
-      // Load profile
       const { data: profile, error: profileErr } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
+        .from('users')
+        .select('id, name, role')
+        .eq('auth_user_id', data.user.id)
         .single();
 
       if (profileErr || !profile) {
-        // Profile not found — create a default one
-        await supabase.from('profiles').insert([{
-          id: data.user.id,
-          display_name: data.user.email?.split('@')[0] || 'Admin',
-          role: 'admin',
-        }]);
-        return {
-          success: true,
-          user: {
-            id: data.user.id,
-            email: data.user.email || '',
-            name: data.user.email?.split('@')[0] || 'Admin',
-            role: 'admin',
-          } as User,
-        };
+        console.error('Login Profile Error:', profileErr);
+        throw new Error(`User profile not found in Supabase users table. Contact administrator.`);
       }
 
       return {
@@ -355,7 +356,37 @@ export const api = {
         user: {
           id: data.user.id,
           email: data.user.email || '',
-          name: profile.display_name,
+          name: profile.name,
+          role: profile.role,
+        } as User,
+      };
+    },
+    
+    logout: async () => {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw new Error(error.message);
+      return { success: true };
+    },
+
+    getSession: async () => {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!session) return { success: false, user: null };
+
+      const { data: profile, error: profileErr } = await supabase
+        .from('users')
+        .select('id, name, role')
+        .eq('auth_user_id', session.user.id)
+        .single();
+
+      if (profileErr || !profile) return { success: false, user: null };
+
+      return {
+        success: true,
+        user: {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: profile.name,
           role: profile.role,
         } as User,
       };
@@ -394,14 +425,6 @@ export const api = {
     },
 
     /**
-     * Sign out from Supabase Auth.
-     */
-    logout: async () => {
-      await supabase.auth.signOut();
-      return { success: true };
-    },
-
-    /**
      * Send password reset email via Supabase Auth.
      */
     resetPassword: async (email: string) => {
@@ -422,6 +445,19 @@ export const api = {
         .order('id', { ascending: false });
       if (error) throw error;
       return (data || []).map(mapMember);
+    },
+
+    admit: async (payload: { memberData: any, paymentData: any }) => {
+      const res = await fetch(`http://localhost:5000/api/admission/new`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Admission failed. Please try again.');
+      }
+      return await res.json();
     },
 
     create: async (member: Omit<Member, 'id' | 'daysRemaining' | 'status'>): Promise<Member> => {
@@ -456,15 +492,21 @@ export const api = {
         .insert([row])
         .select()
         .single();
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('members_phone_key')) {
+          throw new Error('A member with this phone number already exists.');
+        }
+        throw error;
+      }
 
-      await supabase.from('activities').insert([{
-        type: 'new_member',
-        member_id: data.id,
-        name: member.name,
-        action: `joined the gym on a ${member.plan} plan`,
-        time: 'Just now',
-      }]);
+      try {
+        await supabase.from('activity_logs').insert([{
+          module: 'Members',
+          action: `Created member: ${member.name}`,
+          entity_type: 'member',
+          entity_id: data.id.toString(),
+        }]);
+      } catch (e) { /* ignore */ }
 
       await supabase.from('notifications').insert([{
         title: 'New Member Registered',
@@ -472,6 +514,24 @@ export const api = {
         category: 'member',
         member_id: data.id,
       }]);
+
+      // Auto-send WhatsApp Welcome message (fire-and-forget)
+      try {
+        const { waTemplates, buildMemberVars } = await import('./wa-templates');
+        const settings = await api.settings.get().catch(() => ({} as any));
+        const vars = buildMemberVars(
+          { name: member.name, phone: member.phone, plan: member.plan, expiryDate: member.expiryDate, joinDate: member.joinDate },
+          settings
+        );
+        const message = waTemplates.render('welcome', vars);
+        if (message && member.phone) {
+          fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: member.phone, message, memberName: member.name, messageType: 'welcome' }),
+          }).catch(() => { /* WA not connected — silent */ });
+        }
+      } catch (_) { /* non-critical */ }
 
       return api.members.getById(data.id);
     },
@@ -513,7 +573,12 @@ export const api = {
         profile_photo:         member.profilePhoto || null,
       };
       const { error } = await supabase.from('members').update(row).eq('id', id);
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes('members_phone_key')) {
+          throw new Error('Another member with this phone number already exists.');
+        }
+        throw error;
+      }
       return api.members.getById(id);
     },
 
@@ -527,28 +592,46 @@ export const api = {
     },
 
     renew: async (id: number, renewal: { plan: string; amount: number; method: string }) => {
-      const planDays: Record<string, number> = {
-        'Monthly': 30, 'Quarterly': 90, 'Annual': 365, 'Drop-in': 1,
-      };
-      const days = planDays[renewal.plan] || 30;
-      const newExpiry = new Date();
-      newExpiry.setDate(newExpiry.getDate() + days);
-      const expiryStr = newExpiry.toISOString().split('T')[0];
+      // Fetch current member to get current expiry date
+      const { data: currentMember } = await supabase
+        .from('members_view')
+        .select('expiry_date')
+        .eq('id', id)
+        .single();
 
-      // Update member plan + expiry, increment renewal_count
-      const { error } = await supabase
+      // Start from current expiry if still valid (future), otherwise start from today
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const currentExpiry = currentMember?.expiry_date
+        ? new Date(currentMember.expiry_date + 'T00:00:00') // Parse as local date
+        : today;
+      const baseDate = currentExpiry > today ? new Date(currentExpiry) : new Date(today);
+
+      // Use calendar months for Monthly/Quarterly/Annual (proper date math, avoids 30d flat)
+      if (renewal.plan === 'Monthly') {
+        baseDate.setMonth(baseDate.getMonth() + 1);
+      } else if (renewal.plan === 'Quarterly') {
+        baseDate.setMonth(baseDate.getMonth() + 3);
+      } else if (renewal.plan === 'Annual') {
+        baseDate.setFullYear(baseDate.getFullYear() + 1);
+      } else {
+        baseDate.setDate(baseDate.getDate() + 1); // Drop-in
+      }
+
+      // Format as YYYY-MM-DD local date (no UTC shift)
+      const y = baseDate.getFullYear();
+      const mo = String(baseDate.getMonth() + 1).padStart(2, '0');
+      const d = String(baseDate.getDate()).padStart(2, '0');
+      const expiryStr = `${y}-${mo}-${d}`;
+
+      const { data: current, error: currentErr } = await supabase
         .from('members')
-        .update({
-          plan: renewal.plan,
-          expiry_date: expiryStr,
-          renewal_count: supabase.rpc as any, // incremented below
-        })
-        .eq('id', id);
+        .select('renewal_count')
+        .eq('id', id)
+        .single();
+      if (currentErr) throw currentErr;
 
-      // Increment renewal_count separately via RPC or select+update
-      const { data: current } = await supabase
-        .from('members').select('renewal_count').eq('id', id).single();
-      await supabase
+      const { error } = await supabase
         .from('members')
         .update({
           plan: renewal.plan,
@@ -556,6 +639,7 @@ export const api = {
           renewal_count: (current?.renewal_count || 0) + 1,
         })
         .eq('id', id);
+      if (error) throw error;
 
       // Record payment
       const member = await api.members.getById(id);
@@ -573,13 +657,14 @@ export const api = {
         finalAmount: renewal.amount,
       });
 
-      await supabase.from('activities').insert([{
-        type: 'renewal',
-        member_id: id,
-        name: member.name,
-        action: `renewed ${renewal.plan} plan for ₹${renewal.amount.toLocaleString('en-IN')}`,
-        time: 'Just now',
-      }]);
+      try {
+        await supabase.from('activity_logs').insert([{
+          module: 'Members',
+          action: `Renewed ${renewal.plan} plan for ₹${renewal.amount.toLocaleString('en-IN')}`,
+          entity_type: 'member',
+          entity_id: id.toString(),
+        }]);
+      } catch (e) { /* ignore */ }
 
       await supabase.from('notifications').insert([{
         title: 'Membership Renewed',
@@ -587,6 +672,30 @@ export const api = {
         category: 'payment',
         member_id: id,
       }]);
+
+      // Auto-send WhatsApp Renewal Confirmation (fire-and-forget)
+      try {
+        const { waTemplates, buildMemberVars } = await import('./wa-templates');
+        const settings = await api.settings.get().catch(() => ({} as any));
+        const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+        const vars = buildMemberVars(
+          { name: member.name, phone: member.phone, plan: renewal.plan, expiryDate: expiryStr },
+          settings,
+          {
+            amount: renewal.amount.toLocaleString('en-IN'),
+            invoice_number: invoiceNumber,
+            renewal_date: today,
+          }
+        );
+        const message = waTemplates.render('membership_renewal', vars);
+        if (message && member.phone) {
+          fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: member.phone, message, memberName: member.name, messageType: 'membership_renewal' }),
+          }).catch(() => { /* WA not connected — silent */ });
+        }
+      } catch (_) { /* non-critical */ }
 
       return { success: true, message: 'Membership renewed successfully' };
     },
@@ -760,8 +869,8 @@ export const api = {
       const row = {
         member_id:         payment.memberId,
         amount:            payment.amount,
-        plan:              payment.plan,
-        date:              payment.date,
+        plan_type:         payment.plan,
+        payment_date:      payment.date,
         method:            payment.method,
         status:            payment.status,
         notes:             payment.notes || null,
@@ -791,6 +900,32 @@ export const api = {
           category: 'payment',
           member_id: payment.memberId,
         }]);
+
+        // Auto-send WhatsApp Payment Confirmation (fire-and-forget)
+        try {
+          const { data: memberRow } = await supabase.from('members').select('phone').eq('id', payment.memberId).single();
+          if (memberRow?.phone) {
+            const { waTemplates, buildMemberVars } = await import('./wa-templates');
+            const settings = await api.settings.get().catch(() => ({} as any));
+            const vars = buildMemberVars(
+              { name: payment.memberName, phone: memberRow.phone, plan: payment.plan },
+              settings,
+              {
+                amount: payment.amount.toLocaleString('en-IN'),
+                invoice_number: invoiceNum,
+                receipt_number: receiptNum,
+              }
+            );
+            const message = waTemplates.render('payment_confirmation', vars);
+            if (message) {
+              fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: memberRow.phone, message, memberName: payment.memberName, messageType: 'payment_confirmation' }),
+              }).catch(() => { /* WA not connected — silent */ });
+            }
+          }
+        } catch (_) { /* non-critical */ }
       }
 
       return {
@@ -799,18 +934,148 @@ export const api = {
         receiptNumber: receiptNum,
       };
     },
+
+    updateStatus: async (id: number | string, status: 'paid' | 'pending'): Promise<void> => {
+      const { data, error } = await supabase
+        .from('payments').update({ status }).eq('id', id).select().single();
+      if (error) throw error;
+
+      if (status === 'paid') {
+        const payment = {
+          id: data.id,
+          memberId: data.member_id,
+          amount: data.amount,
+          plan: data.plan_type,
+          invoiceNumber: data.invoice_number,
+          receiptNumber: data.receipt_number,
+        };
+
+        const { data: memberRow } = await supabase.from('members').select('name, phone').eq('id', payment.memberId).single();
+        if (memberRow) {
+          await supabase.from('activities').insert([{
+            type: 'payment',
+            member_id: payment.memberId,
+            name: memberRow.name,
+            action: `paid ₹${payment.amount.toLocaleString('en-IN')} for ${payment.plan} plan`,
+            time: 'Just now',
+          }]);
+          await supabase.from('notifications').insert([{
+            title: 'Payment Received',
+            message: `${memberRow.name} paid ₹${payment.amount.toLocaleString('en-IN')} for ${payment.plan} plan.`,
+            category: 'payment',
+            member_id: payment.memberId,
+          }]);
+
+          try {
+            if (memberRow.phone) {
+              const { waTemplates, buildMemberVars } = await import('./wa-templates');
+              const settings = await api.settings.get().catch(() => ({} as any));
+              const vars = buildMemberVars(
+                { name: memberRow.name, phone: memberRow.phone, plan: payment.plan },
+                settings,
+                {
+                  amount: payment.amount.toLocaleString('en-IN'),
+                  invoice_number: payment.invoiceNumber,
+                  receipt_number: payment.receiptNumber,
+                }
+              );
+              const message = waTemplates.render('payment_confirmation', vars);
+              if (message) {
+                fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ phone: memberRow.phone, message, memberName: memberRow.name, messageType: 'payment_confirmation' }),
+                }).catch(() => {});
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    },
+
+    resendReceipt: async (id: number | string): Promise<void> => {
+      const { data, error } = await supabase
+        .from('payments').select('*').eq('id', id).single();
+      if (error) throw error;
+
+      const { data: memberRow } = await supabase.from('members').select('name, phone').eq('id', data.member_id).single();
+      if (!memberRow?.phone) throw new Error('Member has no phone number');
+
+      const { waTemplates, buildMemberVars } = await import('./wa-templates');
+      const settings = await api.settings.get().catch(() => ({} as any));
+      const vars = buildMemberVars(
+        { name: memberRow.name, phone: memberRow.phone, plan: data.plan_type },
+        settings,
+        {
+          amount: data.amount.toLocaleString('en-IN'),
+          invoice_number: data.invoice_number,
+          receipt_number: data.receipt_number,
+        }
+      );
+      const message = waTemplates.render('payment_confirmation', vars);
+      
+      if (message) {
+        // Generate PDF
+        const jsPDF = (await import('jspdf')).default;
+        const autoTable = (await import('jspdf-autotable')).default;
+        const doc = new jsPDF();
+        
+        doc.setFontSize(22);
+        doc.text(settings?.gymName || 'TTZ Gym', 14, 20);
+        doc.setFontSize(10);
+        doc.text('Payment Invoice', 14, 28);
+        doc.text(`Receipt #: ${data.receipt_number}`, 14, 34);
+        doc.text(`Date: ${data.payment_date}`, 14, 40);
+        doc.text(`Member: ${memberRow.name}`, 14, 46);
+        
+        autoTable(doc, {
+          startY: 55,
+          head: [['Item', 'Amount']],
+          body: [
+            [`Membership Plan - ${data.plan_type}`, `Rs. ${data.amount}`]
+          ],
+        });
+        
+        const pdfBase64 = doc.output('datauristring').split(',')[1];
+
+        // Send Request without awaiting so UI doesn't block for long
+        fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: memberRow.phone, message, memberName: memberRow.name, messageType: 'payment_confirmation', pdfBase64 }),
+        }).catch(err => console.error('Failed to send WA message:', err));
+      }
+    },
   },
 
   // ── Attendance ────────────────────────────────────────────────────────────
   attendance: {
     getToday: async (): Promise<AttendanceRecord[]> => {
-      const today = new Date().toISOString().split('T')[0];
+      const d = new Date();
+      const today = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
       const { data, error } = await supabase
         .from('attendance_view').select('*').eq('date', today);
       if (error) throw error;
       return (data || []).map((a: any) => ({
-        id: a.id, memberId: a.member_id, memberName: a.member_name,
-        checkInTime: a.check_in_time, status: a.status, date: a.date,
+        id: a.id, memberId: a.member_id, memberName: a.member_name, memberPhone: a.member_phone,
+        checkInTime: a.check_in_time, checkOutTime: a.check_out_time, status: a.status, date: a.date,
+        method: a.attendance_method, remarks: a.notes, markedBy: a.marked_by
+      })) as AttendanceRecord[];
+    },
+
+    list: async (filters?: { startDate?: string; endDate?: string; memberId?: string | number }): Promise<AttendanceRecord[]> => {
+      let query = supabase.from('attendance_view').select('*');
+      if (filters?.startDate) query = query.gte('date', filters.startDate);
+      if (filters?.endDate) query = query.lte('date', filters.endDate);
+      if (filters?.memberId) query = query.eq('member_id', filters.memberId);
+      
+      const { data, error } = await query.order('date', { ascending: false }).order('check_in_time', { ascending: false });
+      if (error) throw error;
+
+      return (data || []).map((a: any) => ({
+        id: a.id, memberId: a.member_id, memberName: a.member_name, memberPhone: a.member_phone,
+        checkInTime: a.check_in_time, checkOutTime: a.check_out_time, status: a.status, date: a.date,
+        method: a.attendance_method, remarks: a.notes, markedBy: a.marked_by
       })) as AttendanceRecord[];
     },
 
@@ -821,7 +1086,8 @@ export const api = {
         .from('members_view').select('name').eq('id', memberId).single();
       if (memberError || !member) throw new Error('Member not found');
 
-      const today = new Date().toISOString().split('T')[0];
+      const d = new Date();
+      const today = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split('T')[0];
       const { data: existing } = await supabase
         .from('attendance').select('id, check_in_time, status, date')
         .eq('member_id', memberId).eq('date', today).maybeSingle();
@@ -830,7 +1096,7 @@ export const api = {
         return { id: existing.id, memberId, memberName: member.name, checkInTime: existing.check_in_time, status: existing.status, date: existing.date, alreadyMarked: true };
       }
 
-      const checkInTime = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      const checkInTime = new Date().toISOString();
       const { data, error } = await supabase.from('attendance')
         .insert([{ member_id: memberId, date: today, check_in_time: checkInTime, status: 'present' }])
         .select().single();
@@ -842,6 +1108,14 @@ export const api = {
       }]);
 
       return { id: data.id, memberId, memberName: member.name, checkInTime: data.check_in_time, status: data.status, date: data.date, alreadyMarked: false };
+    },
+
+    checkOut: async (id: number | string): Promise<void> => {
+      const checkOutTime = new Date().toISOString();
+      const { error } = await supabase.from('attendance')
+        .update({ check_out_time: checkOutTime })
+        .eq('id', id);
+      if (error) throw error;
     },
   },
 
@@ -855,15 +1129,17 @@ export const api = {
     },
 
     create: async (trainer: Omit<Trainer, 'id'>): Promise<Trainer> => {
-      const { data, error } = await supabase.from('trainers').insert([trainer]).select().single();
+      const { assignedMembers, ...payload } = trainer as any;
+      const { data, error } = await supabase.from('trainers').insert([payload]).select().single();
       if (error) throw error;
-      return data as Trainer;
+      return { ...data, assignedMembers: 0 } as Trainer;
     },
 
     update: async (id: number, trainer: Omit<Trainer, 'id'>): Promise<Trainer> => {
-      const { data, error } = await supabase.from('trainers').update(trainer).eq('id', id).select().single();
+      const { assignedMembers, ...payload } = trainer as any;
+      const { data, error } = await supabase.from('trainers').update(payload).eq('id', id).select().single();
       if (error) throw error;
-      return data as Trainer;
+      return { ...data, assignedMembers: assignedMembers || 0 } as Trainer;
     },
 
     delete: async (id: number) => {
@@ -918,89 +1194,62 @@ export const api = {
   },
 
   // ── Reports ───────────────────────────────────────────────────────────────
-  reports: {
-    getSummary: async (): Promise<ReportSummary> => {
-      const [paymentsRes, attendanceRes, membersRes, expensesRes] = await Promise.all([
-        supabase.from('payments_view').select('date, amount, status'),
-        supabase.from('attendance').select('date, status'),
-        supabase.from('members_view').select('plan, status'),
-        supabase.from('expenses').select('amount, expense_date').is('deleted_at', null),
-      ]);
+  reports: {},
 
-      const payments = paymentsRes.data || [];
-      const attendance = attendanceRes.data || [];
-      const members = membersRes.data || [];
-      const expenses = expensesRes.data || [];
-
-      const totalRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + Number(p.amount), 0);
-      const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
-      const netProfit = totalRevenue - totalExpenses;
-
-      // Monthly revenue last 6 months
-      const revByMonth: Record<string, number> = {};
-      const expByMonth: Record<string, number> = {};
-      payments.filter(p => p.status === 'paid').forEach(p => {
-        const m = p.date.slice(0, 7);
-        revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
-      });
-      expenses.forEach(e => {
-        const m = (e.expense_date || '').slice(0, 7);
-        expByMonth[m] = (expByMonth[m] || 0) + Number(e.amount);
-      });
-
-      const allMonths = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date();
-        d.setMonth(d.getMonth() - (5 - i));
-        return d.toISOString().slice(0, 7);
-      });
-
-      const monthlyRevenueData = allMonths.map(m => ({
-        month: new Date(m + '-01').toLocaleString('en-IN', { month: 'short' }),
-        revenue: revByMonth[m] || 0,
-        expenses: expByMonth[m] || 0,
-      }));
-
-      // Membership distribution
-      const planCounts: Record<string, number> = {};
-      members.forEach(m => { planCounts[m.plan] = (planCounts[m.plan] || 0) + 1; });
-      const colors = ['#fbbf24', '#4ade80', '#60a5fa', '#f87171', '#a78bfa'];
-      const membershipDistribution = Object.entries(planCounts).map(([name, value], i) => ({
-        name, value, color: colors[i % colors.length],
-      }));
-
-      // Attendance trend (last 4 weeks)
-      const attByWeek: Record<string, number> = {};
-      attendance.filter(a => a.status === 'present').forEach(a => {
-        const d = new Date(a.date);
-        const weekNum = Math.ceil(d.getDate() / 7);
-        const key = `W${weekNum} ${d.toLocaleString('en-IN', { month: 'short' })}`;
-        attByWeek[key] = (attByWeek[key] || 0) + 1;
-      });
-      const attendanceTrend = Object.entries(attByWeek).slice(-4).map(([week, attendance]) => ({ week, attendance }));
-
-      const presentCount = attendance.filter(a => a.status === 'present').length;
-      const avgAttendance = Math.round(presentCount / Math.max(1, 30));
-
-      return { totalRevenue, totalExpenses, netProfit, avgAttendance, monthlyRevenueData, membershipDistribution, attendanceTrend };
+  // ── Central Analytics ──────────────────────────────────────────────────────
+  analytics: {
+    getDashboardStats: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/analytics/dashboard`);
+      if (!res.ok) throw new Error('Failed to fetch dashboard stats');
+      return res.json();
     },
+    getInsights: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/analytics/insights`);
+      if (!res.ok) throw new Error('Failed to fetch insights');
+      return res.json();
+    },
+    getReports: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/analytics/reports`);
+      if (!res.ok) throw new Error('Failed to fetch reports');
+      return res.json();
+    },
+    getExpenses: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/analytics/expenses`);
+      if (!res.ok) throw new Error('Failed to fetch expense summary');
+      return res.json();
+    },
+    getDashboardActions: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/dashboard/actions`);
+      if (!res.ok) return []; // Fallback inside components if needed
+      return res.json();
+    },
+    getRecentActivity: async () => {
+      const res = await fetch(`${API_BASE_URL}/api/dashboard/recent-activity`);
+      if (!res.ok) return [];
+      return res.json();
+    }
   },
 
   // ── WhatsApp ──────────────────────────────────────────────────────────────
   whatsapp: {
     getConfig: async (): Promise<WhatsAppConfig> => {
-      const { data, error } = await supabase.from('whatsapp_config').select('*').limit(1).maybeSingle();
+      const { data, error } = await supabase
+        .from(TABLES.whatsappSessions)
+        .select(SELECTS.whatsappSession)
+        .eq('session_name', 'default')
+        .maybeSingle();
       if (error && error.code !== 'PGRST116') throw error;
       return data ? {
         apiKey: data.api_key || '', phoneNumber: data.phone_number || '',
-        provider: data.provider || 'twilio', isConnected: data.is_connected ? 1 : 0,
-        reminderEnabled: data.reminder_enabled ? 1 : 0,
-        expiryReminderDays: data.expiry_reminder_days || 7,
-        lowAttendanceDays: data.low_attendance_days || 5,
+        provider: 'whatsapp-web.js', isConnected: data.status === 'connected' ? 1 : 0,
+        reminderEnabled: 1,
+        expiryReminderDays: 7,
+        lowAttendanceDays: 5,
         customMessage: data.custom_message || 'Hi {name}, your TTZ membership expires on {expiry_date}.',
         sendMethod: data.send_method || 'whatsapp',
-        autoSend: data.auto_send ? 1 : 0,
+        autoSend: 0,
       } : {
-        apiKey: '', phoneNumber: '', provider: 'twilio', isConnected: 0,
+        apiKey: '', phoneNumber: '', provider: 'whatsapp-web.js', isConnected: 0,
         reminderEnabled: 1, expiryReminderDays: 7, lowAttendanceDays: 5,
         customMessage: 'Hi {name}, your TTZ membership expires on {expiry_date}. Renew now!',
         sendMethod: 'whatsapp', autoSend: 0,
@@ -1008,74 +1257,97 @@ export const api = {
     },
 
     saveConfig: async (config: Partial<WhatsAppConfig>) => {
-      const { data: existing } = await supabase.from('whatsapp_config').select('id').limit(1).maybeSingle();
       const row = {
-        api_key: config.apiKey, phone_number: config.phoneNumber,
-        provider: config.provider, is_connected: Boolean(config.isConnected),
-        reminder_enabled: Boolean(config.reminderEnabled),
-        expiry_reminder_days: config.expiryReminderDays,
-        low_attendance_days: config.lowAttendanceDays,
-        custom_message: config.customMessage,
-        send_method: config.sendMethod, auto_send: Boolean(config.autoSend),
+        session_name: 'default',
+        phone_number: config.phoneNumber || null,
+        status: config.isConnected ? 'connected' : 'disconnected',
+        updated_at: new Date().toISOString(),
       };
-      let error;
-      if (existing) {
-        ({ error } = await supabase.from('whatsapp_config').update(row).eq('id', existing.id));
+      const { data: existing, error: lookupError } = await supabase
+        .from(TABLES.whatsappSessions)
+        .select('id')
+        .eq('session_name', 'default')
+        .limit(1)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+
+      if (existing?.id) {
+        const { error } = await supabase
+          .from(TABLES.whatsappSessions)
+          .update(row)
+          .eq('id', existing.id);
+        if (error) throw error;
       } else {
-        ({ error } = await supabase.from('whatsapp_config').insert([{ id: 1, ...row }]));
+        const { error } = await supabase.from(TABLES.whatsappSessions).insert([row]);
+        if (error) throw error;
       }
-      if (error) throw error;
       return { success: true, message: 'Config saved' };
     },
 
     getLogs: async (): Promise<ReminderLog[]> => {
       const { data, error } = await supabase
-        .from('reminder_logs_view').select('*').order('sent_at', { ascending: false }).limit(50);
-      if (error) {
-        // Fallback to base table if view doesn't exist
-        const { data: base } = await supabase.from('reminder_logs').select('*').order('sent_at', { ascending: false }).limit(50);
-        return (base || []).map((r: any) => ({
-          id: r.id, memberName: r.member_name || 'System', phone: r.phone || '',
-          type: r.type, message: r.message, method: r.method,
-          status: r.status, sentAt: r.sent_at || r.created_at,
-        }));
-      }
+        .from(TABLES.whatsappLogs)
+        .select(SELECTS.whatsappLogs)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
       return (data || []).map((r: any) => ({
-        id: r.id, memberName: r.member_name || 'System', phone: r.member_phone || '',
-        type: r.type, message: r.message, method: r.method,
-        status: r.status, sentAt: r.sent_at,
+        id: r.id,
+        memberName: r.member_id ? `Member #${r.member_id}` : 'System',
+        phone: r.recipient_phone || '',
+        type: r.message_type || 'manual',
+        message: r.content || '',
+        method: 'whatsapp',
+        status: r.status,
+        sentAt: r.sent_at || r.created_at,
       }));
     },
 
     sendTest: async (phone: string, method: string) => {
-      await supabase.from('reminder_logs').insert([{
-        member_id: null,
-        type: 'test',
-        message: 'Test message from TTZ Gym Management Software',
-        method: method || 'whatsapp',
-        status: 'delivered',
-      }]);
-      return { success: true, message: 'Test message logged' };
+      if (method && method !== 'whatsapp') {
+        throw new Error('Only real WhatsApp delivery is enabled. SMS simulation has been removed.');
+      }
+      const gymName = 'TTZ Fitness';
+      const res = await fetch(`${API_BASE_URL}/api/whatsapp/send-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          message: `Hello! This is an automated system verification ping from *${gymName}*. If you received this message, your WhatsApp integration is active and verified. 🏋️`,
+          memberName: 'Test',
+          messageType: 'test',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'WhatsApp system ping failed');
+      return { success: true, message: 'System ping sent successfully' };
     },
 
-    sendReminders: async (_type: 'expiry' | 'payment' | 'attendance' | 'promo') => {
-      return { success: true, message: 'Bulk reminders queued', count: 0 };
+    sendReminders: async (type: 'expiry' | 'payment' | 'attendance' | 'promo', memberId?: string | number) => {
+      const res = await fetch(`${API_BASE_URL}/api/whatsapp/send-reminders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, memberId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to send reminders');
+      return { success: true, ...data };
     },
 
     clearLogs: async () => {
-      const { error } = await supabase.from('reminder_logs').delete().neq('id', 0);
+      const { error } = await supabase.from(TABLES.whatsappLogs).delete().neq('id', -1);
       if (error) throw error;
       return { success: true };
     },
 
     getTemplates: async () => {
-      const { data, error } = await supabase.from('whatsapp_templates').select('*').eq('is_active', true).order('id');
+      const { data, error } = await supabase.from(TABLES.whatsappTemplates).select('*').eq('is_active', true).order('id');
       if (error) throw error;
       return data || [];
     },
 
     getAutomationRules: async () => {
-      const { data, error } = await supabase.from('automation_rules').select('*, whatsapp_templates(name, message)').order('id');
+      const { data, error } = await supabase.from(TABLES.automationRules).select('*, whatsapp_templates(name, message)').order('id');
       if (error) throw error;
       return data || [];
     },
@@ -1089,37 +1361,87 @@ export const api = {
         .order('expense_date', { ascending: false });
       if (error) throw error;
       return (data || []).map((e: any) => ({
-        id: e.id, category: e.category, amount: Number(e.amount),
-        month: new Date(e.expense_date).getMonth() + 1,
-        year: new Date(e.expense_date).getFullYear(),
-        notes: e.description || e.notes,
-        createdAt: e.created_at,
+        id:            e.id,
+        category:      e.category,
+        amount:        Number(e.amount),
+        month:         new Date(e.expense_date + 'T00:00:00').getMonth() + 1,
+        year:          new Date(e.expense_date + 'T00:00:00').getFullYear(),
+        expenseDate:   e.expense_date,
+        vendor:        e.vendor || null,
+        paymentMethod: e.payment_method || null,
+        notes:         e.notes || e.description,
+        description:   e.description,
+        createdAt:     e.created_at,
       }));
     },
 
     create: async (expense: Omit<Expense, 'id' | 'createdAt'>): Promise<Expense> => {
-      const expenseDate = expense.month && expense.year
-        ? `${expense.year}-${String(expense.month).padStart(2, '0')}-01`
-        : new Date().toISOString().split('T')[0];
+      const expenseDate = expense.expenseDate
+        || (expense.month && expense.year
+          ? `${expense.year}-${String(expense.month).padStart(2, '0')}-01`
+          : new Date().toISOString().split('T')[0]);
 
       const { data, error } = await supabase.from('expenses')
-        .insert([{ category: expense.category.toLowerCase(), amount: expense.amount, expense_date: expenseDate, description: expense.notes }])
+        .insert([{
+          category:       expense.category,
+          amount:         expense.amount,
+          expense_date:   expenseDate,
+          notes:          expense.notes || expense.description || null,
+        }])
         .select().single();
       if (error) throw error;
+
+      // Log activity so dashboard/recent-activity refreshes
+      try {
+        await supabase.from('activities').insert([{
+          type: 'system',
+          name: expense.category,
+          action: `Expense logged: ₹${expense.amount.toLocaleString('en-IN')} — ${expense.category}`,
+          time: 'Just now',
+        }]);
+      } catch (_) { /* non-critical */ }
+
+      const d = new Date(expenseDate + 'T00:00:00');
       return {
-        id: data.id, category: expense.category, amount: Number(data.amount),
-        month: expense.month, year: expense.year, notes: expense.notes,
-        createdAt: data.created_at,
+        id:            data.id,
+        category:      expense.category,
+        amount:        Number(data.amount),
+        month:         d.getMonth() + 1,
+        year:          d.getFullYear(),
+        expenseDate:   expenseDate,
+        vendor:        expense.vendor,
+        paymentMethod: expense.paymentMethod,
+        notes:         expense.notes,
+        createdAt:     data.created_at,
       };
     },
 
     update: async (id: number, expense: Omit<Expense, 'id' | 'createdAt'>): Promise<Expense> => {
-      const expenseDate = `${expense.year}-${String(expense.month).padStart(2, '0')}-01`;
+      const expenseDate = expense.expenseDate
+        || `${expense.year}-${String(expense.month).padStart(2, '0')}-01`;
       const { data, error } = await supabase.from('expenses')
-        .update({ category: expense.category.toLowerCase(), amount: expense.amount, expense_date: expenseDate, description: expense.notes })
+        .update({
+          category:       expense.category,
+          amount:         expense.amount,
+          expense_date:   expenseDate,
+          vendor:         expense.vendor || null,
+          payment_method: expense.paymentMethod || null,
+          notes:          expense.notes || null,
+          description:    expense.notes || null,
+        })
         .eq('id', id).select().single();
       if (error) throw error;
-      return { id, ...expense, createdAt: data.created_at };
+
+      try {
+        await supabase.from('activities').insert([{
+          type: 'system',
+          name: expense.category,
+          action: `Expense updated: ₹${expense.amount.toLocaleString('en-IN')} — ${expense.category}`,
+          time: 'Just now',
+        }]);
+      } catch (_) { /* non-critical */ }
+
+      return { id, ...expense, expenseDate, createdAt: data.created_at };
     },
 
     delete: async (id: number) => {
@@ -1129,92 +1451,10 @@ export const api = {
       return { success: true };
     },
 
-    getSummary: async () => {
-      const currentMonth = new Date().toISOString().slice(0, 7);
-      const [expensesRes, paymentsRes] = await Promise.all([
-        supabase.from('expenses').select('amount, expense_date, category').is('deleted_at', null),
-        supabase.from('payments').select('amount, date, status').is('deleted_at', null),
-      ]);
-
-      const expenses = expensesRes.data || [];
-      const payments = paymentsRes.data || [];
-
-      const totalExpenses = expenses.filter(e => e.expense_date?.startsWith(currentMonth)).reduce((s, e) => s + Number(e.amount), 0);
-      const totalRevenue = payments.filter(p => p.status === 'paid' && p.date?.startsWith(currentMonth)).reduce((s, p) => s + Number(p.amount), 0);
-      const netProfit = totalRevenue - totalExpenses;
-
-      // By category
-      const catTotals: Record<string, number> = {};
-      expenses.filter(e => e.expense_date?.startsWith(currentMonth)).forEach(e => {
-        catTotals[e.category] = (catTotals[e.category] || 0) + Number(e.amount);
-      });
-      const monthlyExpenses = Object.entries(catTotals).map(([category, total]) => ({ category, total }));
-
-      // Monthly comparison (last 6 months)
-      const monthlyComp = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        const m = d.toISOString().slice(0, 7);
-        return {
-          month: d.toLocaleString('en-IN', { month: 'short' }),
-          expenses: expenses.filter(e => e.expense_date?.startsWith(m)).reduce((s, e) => s + Number(e.amount), 0),
-        };
-      }).reverse();
-
-      return { totalExpenses, totalRevenue, netProfit, monthlyExpenses, monthlyComparison: monthlyComp };
-    },
   },
 
   // ── Insights ───────────────────────────────────────────────────────────────
-  insights: {
-    get: async (): Promise<InsightsData> => {
-      const [membersRes, paymentsRes] = await Promise.all([
-        supabase.from('members_view').select('status, plan'),
-        supabase.from('payments_view').select('date, amount, status'),
-      ]);
-
-      const members = membersRes.data || [];
-      const payments = paymentsRes.data || [];
-
-      const totalMembers = members.length;
-      const activeMembers = members.filter(m => m.status === 'active').length;
-      const expiredMembers = members.filter(m => m.status === 'expired').length;
-      const expiringMembers = members.filter(m => m.status === 'expiring').length;
-      const retentionRate = totalMembers > 0 ? Math.round((activeMembers / totalMembers) * 100) : 0;
-      const renewalRate = totalMembers > 0 ? Math.round(((totalMembers - expiredMembers) / totalMembers) * 100) : 0;
-
-      const planCounts: Record<string, number> = {};
-      members.forEach(m => { planCounts[m.plan] = (planCounts[m.plan] || 0) + 1; });
-      const topPlans = Object.entries(planCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([plan, count]) => ({ plan, count }));
-
-      const revByMonth: Record<string, number> = {};
-      payments.filter(p => p.status === 'paid').forEach(p => {
-        const m = p.date?.slice(0, 7) || '';
-        revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
-      });
-      const revenueTrend = Object.entries(revByMonth)
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .slice(-6)
-        .map(([m, revenue]) => ({
-          month: new Date(m + '-01').toLocaleString('en-IN', { month: 'short' }),
-          revenue,
-        }));
-
-      const currentMonth = new Date().toISOString().slice(0, 7);
-      const expectedMonthlyIncome = payments
-        .filter(p => p.status === 'paid' && p.date?.startsWith(currentMonth))
-        .reduce((s, p) => s + Number(p.amount), 0);
-
-      return {
-        totalMembers, activeMembers, expiredMembers, expiringMembers,
-        retentionRate, renewalRate, inactiveMembers: expiredMembers,
-        topPlans, revenueTrend, expectedMonthlyIncome,
-      };
-    },
-  },
+  insights: {},
 
   // ── Leads ─────────────────────────────────────────────────────────────────
   leads: {
@@ -1287,7 +1527,6 @@ export const api = {
         name: visitor.name, phone: visitor.phone,
         purpose: visitor.purpose || 'enquiry',
         trial_date: visitor.trialDate || null,
-        interested_plan: visitor.interestedMembership || null,
         follow_up_date: visitor.followUpDate || null,
       }]).select().single();
       if (error) throw error;

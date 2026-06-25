@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   CreditCard, Search, Download, CheckCircle, Clock, FileText, IndianRupee,
-  TrendingUp, ArrowUpRight, Plus, Filter, MoreVertical, X
+  TrendingUp, ArrowUpRight, Plus, Filter, MoreVertical, X, MessageCircle
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { api, Payment, Member } from '../services/api';
@@ -15,6 +15,7 @@ interface PaymentsProps {
 export default function Payments({ onPageChange }: PaymentsProps) {
   const payments = useStore(state => state.payments);
   const members = useStore(state => state.members);
+  const settings = useStore(state => state.settings);
   const isLoading = useStore(state => state.loading);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'paid' | 'pending'>('all');
@@ -28,7 +29,7 @@ export default function Payments({ onPageChange }: PaymentsProps) {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const member = members.find(m => m.id === Number(formData.memberId));
+      const member = members.find(m => String(m.id) === String(formData.memberId));
       if (!member) return toast.error('Please select a member');
       
       await api.payments.create({
@@ -48,10 +49,39 @@ export default function Payments({ onPageChange }: PaymentsProps) {
     }
   };
 
+  const handleMarkAsPaid = async (payment: Payment) => {
+    try {
+      await api.payments.updateStatus(payment.id, 'paid');
+      toast.success('Payment marked as paid & confirmation sent via WhatsApp');
+      useStore.getState().fetchInitialData();
+    } catch (err) {
+      toast.error('Failed to update payment status');
+    }
+  };
+
+  const handleResendWA = async (payment: Payment) => {
+    try {
+      await api.payments.resendReceipt(payment.id);
+      toast.success('Digital receipt sent via WhatsApp successfully!');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to send WhatsApp message');
+    }
+  };
+
   const handleDownloadInvoice = (payment: Payment) => {
     // Generate a simple printable invoice
     const invoiceWindow = window.open('', '_blank');
     if (!invoiceWindow) return;
+    
+    // Fallbacks if settings are missing
+    const gymName = settings?.gym_name || 'TTZ Fitness';
+    const tagline = settings?.tagline || 'Fitness • Focus • Future';
+    const address = settings?.address || '123 Fitness Street';
+    const phone = settings?.primary_phone || '8668891406';
+    const altPhone = settings?.secondary_phone || '';
+    const email = settings?.email || 'support@ttz.com';
+    const website = settings?.website || 'www.ttzfitness.com';
+    const gst = settings?.gst_number || '';
     
     invoiceWindow.document.write(`
       <html>
@@ -61,52 +91,93 @@ export default function Payments({ onPageChange }: PaymentsProps) {
           body { font-family: 'Inter', sans-serif; padding: 40px; color: #18181b; }
           .header { display: flex; justify-content: space-between; border-bottom: 2px solid #e4e4e7; padding-bottom: 20px; margin-bottom: 40px; }
           .title { font-size: 32px; font-weight: 800; margin: 0; color: #09090b; }
-          .meta { color: #71717a; font-size: 14px; }
-          .details { margin-bottom: 40px; }
+          .tagline { font-size: 14px; font-style: italic; color: #52525b; margin: 4px 0 12px; }
+          .meta { color: #71717a; font-size: 14px; margin: 2px 0; }
+          .details { margin-bottom: 40px; display: flex; justify-content: space-between; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
           .table th { background: #f4f4f5; padding: 12px; text-align: left; font-size: 12px; text-transform: uppercase; color: #52525b; }
           .table td { padding: 16px 12px; border-bottom: 1px solid #e4e4e7; }
           .total { text-align: right; font-size: 24px; font-weight: 700; color: #09090b; }
+          .footer { margin-top: 80px; text-align: center; color: #71717a; font-size: 10px; border-top: 1px solid #e4e4e7; padding-top: 20px; }
         </style>
       </head>
       <body>
         <div class="header">
           <div>
             <h1 class="title">INVOICE</h1>
-            <p class="meta">Receipt #${payment.id}<br>Date: ${new Date(payment.date).toLocaleDateString()}</p>
+            <p class="meta"><strong>Invoice Number:</strong> INV-${new Date().getFullYear()}-${payment.id}</p>
+            <p class="meta"><strong>Receipt Number:</strong> REC-${payment.id}</p>
+            <p class="meta"><strong>Transaction ID:</strong> TXN-${Math.floor(Math.random() * 1000000)}</p>
+            <p class="meta"><strong>Invoice Date:</strong> ${new Date().toLocaleDateString('en-IN')}</p>
+            <p class="meta"><strong>Payment Date:</strong> ${new Date(payment.date).toLocaleDateString('en-IN')}</p>
+          </div>
+          <div style="text-align: right; max-width: 300px;">
+            <h2 style="margin: 0; color: #09090b;">${gymName}</h2>
+            <div class="tagline">${tagline}</div>
+            <p class="meta">${address}</p>
+            <p class="meta" style="margin-top: 8px;"><strong>Phone:</strong> ${phone}${altPhone ? ' / ' + altPhone : ''}</p>
+            <p class="meta"><strong>Email:</strong> ${email}</p>
+            <p class="meta"><strong>Website:</strong> ${website}</p>
+            ${gst ? `<p class="meta"><strong>GSTIN:</strong> ${gst}</p>` : ''}
+          </div>
+        </div>
+        
+        <div class="details">
+          <div>
+            <p class="meta" style="margin: 0 0 4px; font-weight: 600;">Bill To:</p>
+            <h3 style="margin: 0; font-size: 18px; color: #09090b;">${payment.memberName}</h3>
+            <p class="meta" style="margin-top: 4px;">Phone: ${members.find(m => m.id === payment.memberId)?.phone || 'N/A'}</p>
           </div>
           <div style="text-align: right;">
-            <h2 style="margin: 0;">TTZ Fitness</h2>
-            <p class="meta">123 Fitness Street<br>Contact: 8668891406</p>
+            <p class="meta"><strong>Payment Status:</strong> ${payment.status.toUpperCase()}</p>
+            <p class="meta"><strong>Collected By:</strong> TTZ Admin</p>
           </div>
         </div>
-        <div class="details">
-          <p class="meta" style="margin: 0 0 4px;">Bill To:</p>
-          <h3 style="margin: 0; font-size: 18px;">${payment.memberName}</h3>
-        </div>
+
         <table class="table">
           <thead>
             <tr>
-              <th>Description</th>
-              <th>Plan</th>
-              <th>Method</th>
+              <th>Membership Plan</th>
+              <th>Duration</th>
+              <th>Payment Mode</th>
               <th style="text-align: right;">Amount</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Gym Membership Subscription</td>
+              <td>Gym Membership Subscription<br/><span style="font-size: 12px; color: #71717a;">${payment.plan} Plan</span></td>
               <td>${payment.plan}</td>
               <td>${payment.method}</td>
-              <td style="text-align: right; font-weight: 600;">₹${payment.amount.toLocaleString()}</td>
+              <td style="text-align: right; font-weight: 600;">₹${payment.amount.toLocaleString('en-IN')}</td>
             </tr>
           </tbody>
         </table>
-        <div class="total">
-          Total: ₹${payment.amount.toLocaleString()}
+        
+        <div style="display: flex; justify-content: flex-end;">
+          <div style="width: 300px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;" class="meta">
+              <span>Subtotal:</span>
+              <span>₹${payment.amount.toLocaleString('en-IN')}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;" class="meta">
+              <span>Discount:</span>
+              <span>₹0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;" class="meta">
+              <span>GST (Inclusive):</span>
+              <span>₹${Math.round(payment.amount * 0.18).toLocaleString('en-IN')}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 16px; border-top: 2px solid #e4e4e7; padding-top: 16px;" class="total">
+              <span>Final Amount:</span>
+              <span>₹${payment.amount.toLocaleString('en-IN')}</span>
+            </div>
+          </div>
         </div>
-        <div style="margin-top: 80px; text-align: center; color: #71717a; font-size: 12px;">
-          Thank you for choosing TTZ Fitness!
+
+        <div class="footer">
+          <p style="margin: 0 0 4px; font-weight: 600; font-size: 12px; color: #52525b;">Generated using TTZ Gym Management Software</p>
+          <p style="margin: 0 0 2px;">Engineered & Developed by Rexora</p>
+          <p style="margin: 0;">Founder & Lead Developer: Aditya Kittad</p>
         </div>
         <script>window.print();</script>
       </body>
@@ -321,6 +392,26 @@ export default function Payments({ onPageChange }: PaymentsProps) {
                     )}
                   </td>
                   <td style={{ padding: '16px 24px', textAlign: 'right' }}>
+                    {payment.status === 'pending' && (
+                      <button
+                        onClick={() => handleMarkAsPaid(payment)}
+                        style={{ background: 'var(--card)', border: '1px solid #4ade80', color: '#4ade80', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s', marginRight: '8px' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(74,222,128,0.1)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'var(--card)'; }}
+                      >
+                        <CheckCircle style={{ width: 12, height: 12 }} /> Mark Paid
+                      </button>
+                    )}
+                    {payment.status === 'paid' && (
+                      <button
+                        onClick={() => handleResendWA(payment)}
+                        style={{ background: 'var(--card)', border: '1px solid #38bdf8', color: '#38bdf8', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s', marginRight: '8px' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(56,189,248,0.1)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'var(--card)'; }}
+                      >
+                        <MessageCircle style={{ width: 12, height: 12 }} /> Send WA
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDownloadInvoice(payment)}
                       style={{ background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--foreground)', padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s' }}

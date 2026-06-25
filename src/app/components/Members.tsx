@@ -72,6 +72,12 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
   const [renewAmount, setRenewAmount] = useState(1200);
   const [renewMethod, setRenewMethod] = useState('UPI');
 
+  // Admission payment states
+  const [admissionAmount, setAdmissionAmount] = useState(1200);
+  const [admissionDiscount, setAdmissionDiscount] = useState(0);
+  const [admissionMethod, setAdmissionMethod] = useState('UPI');
+  const [admissionStatus, setAdmissionStatus] = useState('paid');
+
   useEffect(() => {
     setFilter(defaultFilter);
   }, [defaultFilter]);
@@ -87,7 +93,8 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
   // Expiry date auto-calculator
   const calculateExpiry = (startDateStr: string, selectedPlan: string) => {
     if (!startDateStr) return '';
-    const start = new Date(startDateStr);
+    // Parse as local date by appending T00:00:00 — prevents UTC-midnight timezone shift
+    const start = new Date(startDateStr + 'T00:00:00');
     if (isNaN(start.getTime())) return '';
 
     if (selectedPlan === 'Monthly') {
@@ -97,7 +104,11 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
     } else if (selectedPlan === 'Annual') {
       start.setFullYear(start.getFullYear() + 1);
     }
-    return start.toISOString().split('T')[0];
+    // Format as local YYYY-MM-DD (not UTC)
+    const y = start.getFullYear();
+    const mo = String(start.getMonth() + 1).padStart(2, '0');
+    const d = String(start.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${d}`;
   };
 
   // Sync expiry date when plan or join date changes
@@ -107,6 +118,13 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
       setExpiryDate(calculated);
     }
   }, [joinDate, plan]);
+
+  // Sync admission amount when plan changes
+  useEffect(() => {
+    if (plan === 'Monthly') setAdmissionAmount(1200);
+    else if (plan === 'Quarterly') setAdmissionAmount(3000);
+    else if (plan === 'Annual') setAdmissionAmount(12000);
+  }, [plan]);
 
   // Sync renewal pre-filled amounts
   useEffect(() => {
@@ -122,18 +140,12 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
         api.members.getWorkout(member.id),
         api.members.getDiet(member.id),
         api.payments.list(),
-        api.attendance.getToday() // fallback mock data
+        api.members.getAttendanceHistory(member.id)
       ]);
       setAssignedWorkout(w);
       setAssignedDiet(d);
       setPaymentHistory(pList.filter(p => p.memberId === member.id));
-      
-      // Attendance: mock list since sqlite table is global
-      setAttendanceHistory([
-        { id: 1, memberName: member.name, memberId: member.id, checkInTime: '07:15 AM', status: 'present', date: '2026-05-29' },
-        { id: 2, memberName: member.name, memberId: member.id, checkInTime: '07:30 AM', status: 'present', date: '2026-05-28' },
-        { id: 3, memberName: member.name, memberId: member.id, checkInTime: '06:55 AM', status: 'present', date: '2026-05-26' }
-      ]);
+      setAttendanceHistory(aList);
     } catch (e) {
       console.warn('Failed to load subdata for member tabs');
     }
@@ -161,6 +173,10 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
     setBodyFat(18);
     setBeforeImage('https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=500');
     setAfterImage('https://images.unsplash.com/photo-1483721310020-03333e577078?w=500');
+    setAdmissionAmount(1200);
+    setAdmissionDiscount(0);
+    setAdmissionMethod('UPI');
+    setAdmissionStatus('paid');
     setShowAddModal(true);
   };
 
@@ -173,10 +189,24 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
     }
 
     try {
-      await api.members.create({ 
+      const memberData = {
         name, phone, plan, joinDate, expiryDate,
         trainerId, weight, targetWeight, height, bodyFat, beforeImage, afterImage 
-      });
+      };
+      
+      const paymentData = {
+        amount: admissionAmount,
+        discount: admissionDiscount,
+        finalAmount: admissionAmount - admissionDiscount,
+        plan,
+        method: admissionMethod,
+        status: admissionStatus,
+        date: joinDate,
+        invoiceNumber: `TTZ-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
+        receiptNumber: `RCP-${Date.now().toString().slice(-8)}`,
+      };
+
+      await api.members.admit({ memberData, paymentData });
       toast.success(`${name} registered successfully!`);
       setShowAddModal(false);
       // Supabase Realtime will automatically update the store
@@ -223,7 +253,7 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
   // Send fee reminder simulation via WhatsApp
   const handleSendReminder = async (member: Member) => {
     try {
-      await api.whatsapp.sendTest(member.phone, 'whatsapp');
+      await api.whatsapp.sendReminders('expiry', member.id);
       toast.success(`Fee reminder sent to ${member.name} successfully! check WhatsApp Logs.`);
     } catch (e) {
       toast.error('Failed to deliver reminder');
@@ -448,8 +478,8 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
 
       {/* --- ADD MEMBER MODAL --- */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
-          <div className="bg-zinc-950 border border-zinc-800 w-full max-w-lg rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 z-50">
+          <div className="bg-zinc-950 border border-zinc-800 w-full max-w-lg max-h-[95vh] rounded-3xl overflow-hidden shadow-2xl flex flex-col">
             <div className="p-6 border-b border-zinc-850 flex items-center justify-between">
               <h2 className="text-white text-lg font-bold flex items-center gap-2">
                 <Plus className="w-5 h-5 text-amber-400" /> Add Gym Member
@@ -459,7 +489,7 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
               </button>
             </div>
             
-            <form onSubmit={handleAddSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-900">
+            <form onSubmit={handleAddSubmit} className="p-6 space-y-4 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-900 flex-1">
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -568,6 +598,57 @@ export default function Members({ defaultFilter = 'all', setDefaultFilter, searc
                       onChange={(e) => setBodyFat(Number(e.target.value))}
                       className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white"
                     />
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment configuration */}
+              <div className="border-t border-zinc-850 pt-4">
+                <span className="text-amber-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 mb-3">
+                  <CreditCard className="w-4 h-4" /> Initial Payment
+                </span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Amount (₹)</label>
+                    <input
+                      type="number"
+                      value={admissionAmount}
+                      onChange={(e) => setAdmissionAmount(Number(e.target.value))}
+                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Discount (₹)</label>
+                    <input
+                      type="number"
+                      value={admissionDiscount}
+                      onChange={(e) => setAdmissionDiscount(Number(e.target.value))}
+                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Method</label>
+                    <select
+                      value={admissionMethod}
+                      onChange={(e) => setAdmissionMethod(e.target.value)}
+                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                    >
+                      <option value="UPI">UPI</option>
+                      <option value="Cash">Cash</option>
+                      <option value="Card">Card</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-zinc-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Status</label>
+                    <select
+                      value={admissionStatus}
+                      onChange={(e) => setAdmissionStatus(e.target.value)}
+                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                    >
+                      <option value="paid">Paid Full</option>
+                      <option value="pending">Pending</option>
+                      <option value="partial">Partial</option>
+                    </select>
                   </div>
                 </div>
               </div>

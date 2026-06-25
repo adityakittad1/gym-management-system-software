@@ -46,3 +46,4 @@ server/gym.db-journal
 *.njsproj
 *.sln
 *.sw?
+.wwebjs_auth/  

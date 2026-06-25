@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { supabase } from '../services/supabase';
 import { toast } from 'sonner';
 import { Database, Download, AlertCircle, Calendar, RefreshCcw } from 'lucide-react';
+import { TABLES, VIEWS, SELECTS } from '../services/db-schema';
 
 export default function BackupCenter() {
   const [isExporting, setIsExporting] = useState(false);
@@ -11,11 +12,11 @@ export default function BackupCenter() {
     try {
       // Fetch all core data sequentially to avoid timeouts on large databases
       const [{ data: members }, { data: payments }, { data: attendance }, { data: expenses }, { data: leads }] = await Promise.all([
-        supabase.from('members_view').select('*'),
-        supabase.from('payments_view').select('*'),
-        supabase.from('attendance_view').select('*'),
-        supabase.from('expenses').select('*').is('deleted_at', null),
-        supabase.from('leads').select('*').is('deleted_at', null)
+        supabase.from(VIEWS.members).select(SELECTS.membersView),
+        supabase.from(VIEWS.payments).select(SELECTS.paymentsView),
+        supabase.from(VIEWS.attendance).select(SELECTS.attendanceView),
+        supabase.from(TABLES.expenses).select('*').is('deleted_at', null),
+        supabase.from(TABLES.leads).select('*').is('deleted_at', null)
       ]);
 
       const backup = {

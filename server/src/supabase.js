@@ -56,37 +56,72 @@ function withSupabase(options = { auth: 'user' }) {
 
     const token = authHeader.split(' ')[1];
 
-    jwt.verify(token, getKey, { algorithms: ['RS256'] }, (err, decoded) => {
+    jwt.verify(token, getKey, { algorithms: ['RS256'] }, async (err, decoded) => {
       if (err) {
         return res.status(401).json({ error: 'Invalid or expired token', details: err.message });
       }
 
-      req.ctx.user = decoded;
-      
-      // Create user-scoped client with RLS
-      req.ctx.supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-        global: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
+      try {
+        const { data: profile } = await supabaseAdmin
+          .from('profiles')
+          .select('role, display_name')
+          .eq('id', decoded.sub)
+          .single();
 
-      next();
+        req.ctx.user = {
+          ...decoded,
+          role: profile?.role || 'user',
+          name: profile?.display_name || 'Unknown'
+        };
+        
+        // Create user-scoped client with RLS
+        req.ctx.supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+          global: {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+
+        next();
+      } catch (e) {
+        return res.status(500).json({ error: 'Internal Server Error validating user profile' });
+      }
     });
   };
 }
 
 async function validateSupabaseConnection() {
   try {
-    const { error } = await supabaseAdmin.from('members').select('id').limit(1);
-    if (error && error.code !== 'PGRST116') {
-      throw error;
+    const expectedTables = [
+      'profiles', 'members', 'payments', 'attendance', 'trainers', 'expenses',
+      'leads', 'visitors', 'workouts', 'diet_plans', 'notifications',
+      'settings', 'activities', 'audit_logs', 'whatsapp_sessions',
+      'whatsapp_templates', 'whatsapp_logs', 'automation_rules',
+      'message_queue', 'delivery_history'
+    ];
+    const missing = [];
+    
+    for (const table of expectedTables) {
+      const { error } = await supabaseAdmin.from(table).select('*', { count: 'exact', head: true });
+      if (error && error.code === 'PGRST205') {
+        missing.push(table);
+      } else if (error && error.code !== 'PGRST116') {
+        // PGRST116 = no rows found (table exists but is empty) — that's fine
+        // Ignore other non-critical errors on startup
+        console.warn(`[SUPABASE] Warning on table "${table}": ${error.message}`);
+      }
     }
-    console.log('[SUPABASE] Connection and tables verified successfully.');
+
+    if (missing.length > 0) {
+      console.warn('[WARNING] Connected to Supabase, but the following tables are missing:');
+      console.warn(JSON.stringify(missing, null, 2));
+    } else {
+      console.log('[SUPABASE] Connection and tables verified successfully.');
+    }
   } catch (err) {
-    console.error('[FATAL] Failed to connect to Supabase or required tables are missing:', err.message);
+    console.error('[FATAL] Failed to connect to Supabase:', err.message);
     process.exit(1);
   }
 }

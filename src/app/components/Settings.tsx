@@ -95,7 +95,7 @@ export default function Settings() {
   };
 
   const handleTestWebhook = () => {
-    toast.success('Simulated test webhook dispatch successful! (HTTP 200 OK)');
+    toast.success('Simulated system ping dispatched successfully! (HTTP 200 OK)');
   };
 
   return (
@@ -183,7 +183,7 @@ export default function Settings() {
                     onClick={handleTestWebhook}
                     className="text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-400 font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-lg hover:text-white hover:border-zinc-700"
                   >
-                    Test Webhook
+                    Ping Webhook
                   </button>
                 </div>
 

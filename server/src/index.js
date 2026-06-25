@@ -21,15 +21,21 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server: SocketIOServer } = require('socket.io');
-const { withSupabase, validateSupabaseConnection, supabaseAdmin } = require('./supabase');
+const { supabaseAdmin, withSupabase, validateSupabaseConnection } = require('./supabase');
 const whatsappService = require('./whatsapp-service');
+const analyticsRouter = require('./analytics-service');
+const admissionRouter = require('./admission-service');
+const templateEngine = require('./whatsapp-template-engine');
+const { healthRoutes, validateDatabaseStartup } = require('./health');
+const scheduler = require('./scheduler');
+const logger = require('./logger');
 
 const app = express();
 const httpServer = http.createServer(app);
 
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174'],
+    origin: '*',
     methods: ['GET', 'POST'],
   },
 });
@@ -48,10 +54,15 @@ io.on('connection', (socket) => {
 app.use(cors());
 app.use(express.json());
 
+// Health Endpoints
+app.use('/health', healthRoutes);
+
 // Detailed Request Logging Middleware
 app.use((req, res, next) => {
   req.reqId = req.reqId || require('crypto').randomUUID();
-  console.log(`\n[API REQ] ${new Date().toISOString()} | ReqID: ${req.reqId} | ${req.method} ${req.url}`);
+  if (!req.url.startsWith('/health')) { // Don't spam logs with health checks
+    logger.info('API', `${req.method} ${req.url}`, { reqId: req.reqId });
+  }
   next();
 });
 
@@ -123,65 +134,25 @@ const createCrudEndpoints = (table) => {
 
 ['members', 'payments', 'attendance', 'trainers', 'expenses', 'leads', 'visitors', 'workouts', 'diet_plans', 'notifications', 'settings', 'activities'].forEach(createCrudEndpoints);
 
-// Auth login (using Supabase Auth instead of manual db queries)
-app.post('/api/auth/login', withSupabase({ auth: 'none' }), async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    res.json({ success: true, user: data.user, session: data.session });
-  } catch (error) {
-    res.status(401).json({ success: false, message: error.message });
-  }
-});
+// Auth is handled entirely by the frontend via Supabase Auth.
+// No custom backend login endpoints are required.
 
-app.post('/api/auth/member-login', withSupabase({ auth: 'none' }), async (req, res) => {
-  const { phone } = req.body;
-  try {
-    const { data, error } = await supabaseAdmin.from('members').select('*').eq('phone', phone).single();
-    if (error) throw error;
-    res.json({ success: true, user: data });
-  } catch (error) {
-    res.status(401).json({ success: false, message: 'Invalid phone number' });
-  }
-});
+// Auth is handled entirely by the frontend via Supabase Auth.
+// No custom backend login endpoints are required.
 
-// Dashboard Overview Routes
-app.get('/api/dashboard/stats', withSupabase({ auth: 'user' }), async (req, res) => {
-  try {
-    const [{ count: totalMembers }, { count: activeMembers }, { count: pendingPayments }] = await Promise.all([
-      req.ctx.supabase.from('members').select('*', { count: 'exact', head: true }),
-      req.ctx.supabase.from('members').select('*', { count: 'exact', head: true }).eq('status', 'active'),
-      req.ctx.supabase.from('payments').select('*', { count: 'exact', head: true }).eq('status', 'pending')
-    ]);
-    respond(res, req, { totalMembers, activeMembers, pendingPayments });
-  } catch (err) {
-    respond(res, req, null, err);
-  }
-});
-
-app.get('/api/dashboard/charts', withSupabase({ auth: 'user' }), async (req, res) => {
-  try {
-    respond(res, req, { revenueData: [], membershipData: [], weeklyStats: [], attendanceTrend: [] });
-  } catch (error) {
-    respond(res, req, null, error);
-  }
-});
-
-app.get('/api/dashboard/recent-activity', withSupabase({ auth: 'user' }), async (req, res) => {
-  try {
-    const { data, error } = await req.ctx.supabase.from('activities').select('*').order('id', { ascending: false }).limit(10);
-    if (error) throw error;
-    respond(res, req, data);
-  } catch (error) {
-    respond(res, req, null, error);
-  }
-});
+// Use specialized routers
+app.use('/api/analytics', analyticsRouter);
+app.use('/api/admission', admissionRouter);
 
 // WhatsApp API Routes
-app.get('/api/whatsapp/config', withSupabase({ auth: 'secret' }), async (req, res) => {
+app.get('/api/whatsapp/config', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { data, error } = await req.ctx.supabaseAdmin.from('whatsapp_config').select('*').limit(1).single();
+    const { data, error } = await supabaseAdmin
+      .from('whatsapp_sessions')
+      .select('*')
+      .eq('session_name', 'default')
+      .limit(1)
+      .maybeSingle();
     if (error && error.code !== 'PGRST116') throw error;
     respond(res, req, data || {});
   } catch (error) {
@@ -189,9 +160,28 @@ app.get('/api/whatsapp/config', withSupabase({ auth: 'secret' }), async (req, re
   }
 });
 
-app.post('/api/whatsapp/config', withSupabase({ auth: 'secret' }), async (req, res) => {
+app.post('/api/whatsapp/config', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { data, error } = await req.ctx.supabaseAdmin.from('whatsapp_config').upsert({ id: 1, ...req.body }).select();
+    const row = { session_name: 'default', ...req.body, updated_at: new Date().toISOString() };
+    const { data: existing, error: lookupError } = await supabaseAdmin
+      .from('whatsapp_sessions')
+      .select('id')
+      .eq('session_name', 'default')
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
+    let data;
+    let error;
+    if (existing?.id) {
+      ({ data, error } = await supabaseAdmin
+        .from('whatsapp_sessions')
+        .update(row)
+        .eq('id', existing.id)
+        .select());
+    } else {
+      ({ data, error } = await supabaseAdmin.from('whatsapp_sessions').insert([row]).select());
+    }
     if (error) throw error;
     respond(res, req, data);
   } catch (error) {
@@ -199,9 +189,9 @@ app.post('/api/whatsapp/config', withSupabase({ auth: 'secret' }), async (req, r
   }
 });
 
-app.get('/api/whatsapp/logs', withSupabase({ auth: 'secret' }), async (req, res) => {
+app.get('/api/whatsapp/logs', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { data, error } = await req.ctx.supabaseAdmin.from('reminder_logs').select('*').order('id', { ascending: false }).limit(50);
+    const { data, error } = await supabaseAdmin.from('whatsapp_logs').select('*').order('created_at', { ascending: false }).limit(50);
     if (error) throw error;
     respond(res, req, data);
   } catch (error) {
@@ -209,9 +199,9 @@ app.get('/api/whatsapp/logs', withSupabase({ auth: 'secret' }), async (req, res)
   }
 });
 
-app.delete('/api/whatsapp/logs', withSupabase({ auth: 'secret' }), async (req, res) => {
+app.delete('/api/whatsapp/logs', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { error } = await req.ctx.supabaseAdmin.from('reminder_logs').delete().neq('id', 0);
+    const { error } = await supabaseAdmin.from('whatsapp_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (error) throw error;
     respond(res, req, { deleted: true });
   } catch (error) {
@@ -225,8 +215,12 @@ app.get('/api/whatsapp/real-status', withSupabase({ auth: 'none' }), (req, res) 
 
 app.post('/api/whatsapp/connect', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    await whatsappService.connect();
-    res.json({ success: true, status: whatsappService.getStatus() });
+    // Respond immediately so UI doesn't hang — WhatsApp init is async (browser launch takes time)
+    res.json({ success: true, message: 'WhatsApp initialization started. Check status or scan QR code.' });
+    // Initialize in background
+    whatsappService.initialize(io).catch(err => {
+      console.error('[WhatsApp] Background init error:', err.message);
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -251,6 +245,24 @@ app.post('/api/whatsapp/disconnect', withSupabase({ auth: 'none' }), async (req,
   }
 });
 
+app.post('/api/whatsapp/clear-session', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    // Destroy the client first
+    await whatsappService.disconnect().catch(() => {});
+    // Delete the session folder
+    const sessionDir = path.join(__dirname, '../../.wwebjs_auth');
+    if (fs.existsSync(sessionDir)) {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+    console.log('[WhatsApp] Session cleared — will generate fresh QR on next connect.');
+    res.json({ success: true, message: 'Session cleared. Click Connect to get a new QR code.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/whatsapp/reconnect', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
     await whatsappService.reconnect();
@@ -262,17 +274,17 @@ app.post('/api/whatsapp/reconnect', withSupabase({ auth: 'none' }), async (req, 
 
 app.post('/api/whatsapp/send-message', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { phone, message, memberName } = req.body;
-    const result = await whatsappService.sendMessage(phone, message);
+    const { phone, message, memberName, member_id, memberId, pdfBase64 } = req.body;
+    const result = await whatsappService.sendMessage(phone, message, { member: memberName }, pdfBase64);
     
-    // Log message using admin client
-    await supabaseAdmin.from('reminder_logs').insert([{
-      memberName: memberName || 'Unknown',
-      phone,
-      type: 'manual',
-      message,
-      method: 'whatsapp',
-      status: 'delivered'
+    // Log message using admin client into the new whatsapp_logs table
+    await supabaseAdmin.from('whatsapp_logs').insert([{
+      recipient_phone: phone,
+      member_id: member_id || memberId || null,
+      message_type: 'manual',
+      content: message,
+      status: 'sent',
+      sent_at: new Date().toISOString()
     }]);
 
     res.json({ success: true, result });
@@ -281,11 +293,116 @@ app.post('/api/whatsapp/send-message', withSupabase({ auth: 'none' }), async (re
   }
 });
 
+// Reminder Generator & Dispatch
+app.post('/api/whatsapp/send-reminders', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const { type, memberId } = req.body;
+    // type can be 'expiry' for now
+    
+    // Fetch settings
+    const { data: settingsData } = await supabaseAdmin.from('settings').select('*');
+    const gymSettings = {};
+    (settingsData || []).forEach(s => { gymSettings[s.key] = s.value; });
+
+    // Fetch members
+    let query = supabaseAdmin.from('members_view').select('*').in('status', ['active', 'expiring', 'expired']);
+    if (memberId) {
+      query = query.eq('id', memberId);
+    }
+    const { data: members } = await query;
+    
+    let sent = 0, failed = 0, errors = [];
+
+    for (const member of (members || [])) {
+      if (!member.phone || member.phone.length < 10) continue;
+
+      let templateType = null;
+      let days = member.days_remaining;
+
+      if (type === 'expiry') {
+        if (days === 30) templateType = 'expiry_30';
+        else if (days === 15) templateType = 'expiry_15';
+        else if (days === 7) templateType = 'expiry_7';
+        else if (days <= 5 && days > 0) templateType = 'expiry_generic';
+        else if (days === 0) templateType = 'expiry_today';
+        else if (days < 0 && days >= -5) templateType = 'expired';
+      }
+
+      if (templateType) {
+        try {
+          const message = templateEngine.generateMessage(templateType, member, gymSettings);
+          await whatsappService.sendMessage(member.phone, message, { member: member.name });
+          
+          await supabaseAdmin.from('whatsapp_logs').insert([{
+            recipient_phone: member.phone,
+            member_id: member.id,
+            message_type: templateType,
+            content: message,
+            status: 'sent',
+            sent_at: new Date().toISOString()
+          }]);
+          sent++;
+        } catch (e) {
+          failed++;
+          errors.push({ phone: member.phone, error: e.message });
+          
+          await supabaseAdmin.from('whatsapp_logs').insert([{
+            recipient_phone: member.phone,
+            member_id: member.id,
+            message_type: templateType,
+            content: 'Failed to generate or send message',
+            status: 'failed',
+            error_reason: e.message
+          }]);
+        }
+      }
+    }
+    
+    res.json({ success: true, sent, failed, errors });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/whatsapp/send-bulk', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    const { members, template } = req.body;
-    const result = await whatsappService.sendBulkMessages(members, template);
-    res.json({ success: true, ...result });
+    const { members: memberList, template } = req.body;
+    if (!memberList || !Array.isArray(memberList)) {
+      return res.status(400).json({ error: 'members array is required' });
+    }
+
+    const { data: settingsData } = await supabaseAdmin.from('settings').select('*');
+    const gymSettings = {};
+    (settingsData || []).forEach(s => { gymSettings[s.key] = s.value; });
+
+    let sent = 0, failed = 0, errors = [];
+    for (const member of memberList) {
+      try {
+        const message = templateEngine.replacePlaceholders(template, member, gymSettings);
+        await whatsappService.sendMessage(member.phone, message, { member: member.name });
+        await supabaseAdmin.from('whatsapp_logs').insert([{
+          recipient_phone: member.phone,
+          member_id: member.id || null,
+          message_type: 'bulk',
+          content: message,
+          status: 'sent',
+          sent_at: new Date().toISOString()
+        }]);
+        sent++;
+      } catch (e) {
+        failed++;
+        errors.push({ phone: member.phone, error: e.message });
+        await supabaseAdmin.from('whatsapp_logs').insert([{
+          recipient_phone: member.phone,
+          member_id: member.id || null,
+          message_type: 'bulk',
+          content: template,
+          status: 'failed',
+          error_reason: e.message
+        }]);
+      }
+    }
+    res.json({ success: true, total: memberList.length, sent, failed, errors });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -297,17 +414,30 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message });
 });
 
-const PORT = process.env.PORT || 5000;
+// --- Start Server ---
+const PORT = process.env.PORT || 5001;
 
-// Start Server with Validation
-async function startServer() {
-  console.log('[System] Starting TTZ API Server...');
-  await validateSupabaseConnection();
+async function bootstrap() {
+  logger.info('Startup', 'Booting TTZ Gym Management Backend...');
   
+  // 1. Verify DB
+  await validateDatabaseStartup();
+
+  // 2. Start Scheduler
+  scheduler.initScheduler();
+
   httpServer.listen(PORT, () => {
-    console.log(`[Server] Running on http://localhost:${PORT}`);
-    console.log(`[Server] Production Supabase Integration Active.`);
+    logger.info('Startup', `Backend server running on http://localhost:${PORT}`);
+    
+    // 3. Auto-Initialize WhatsApp in the background
+    // If a session exists, it will seamlessly reconnect. If not, it will await connection.
+    setTimeout(() => {
+      logger.info('Startup', 'Auto-initializing WhatsApp service...');
+      whatsappService.initialize(io).catch(err => {
+        logger.error('Startup', 'WhatsApp initialization failed', err.message);
+      });
+    }, 2000);
   });
 }
 
-startServer();
+bootstrap();

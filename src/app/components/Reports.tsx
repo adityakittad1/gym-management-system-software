@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { TrendingUp, DollarSign, Users, Calendar, Download, Star, Sparkles, Award, FileText, Table as TableIcon, File as FileIcon, ChevronDown } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { api, ReportSummary } from '../services/api';
-import { useStore } from '../store/useStore';
-import { toast } from 'sonner';
+import { api } from '../services/api';
+import { useRealtimeAnalytics } from '../hooks/useRealtimeAnalytics';
 
 // Import exporters — jspdf v4 uses named export; jspdf-autotable v5 is a side-effect plugin
 import { jsPDF } from 'jspdf';
@@ -19,88 +18,10 @@ declare module 'jspdf' {
   }
 }
 
-const defaultRevenueData = [
-  { month: 'Jan', revenue: 45000, expenses: 18000 },
-  { month: 'Feb', revenue: 52000, expenses: 19000 },
-  { month: 'Mar', revenue: 48000, expenses: 17500 },
-  { month: 'Apr', revenue: 61000, expenses: 20000 },
-  { month: 'May', revenue: 55000, expenses: 18500 },
-  { month: 'Jun', revenue: 67000, expenses: 21000 },
-];
 
-const defaultMembershipDistribution = [
-  { name: 'Monthly Plan', value: 45, color: '#fbbf24' },
-  { name: 'Quarterly Plan', value: 35, color: '#22c55e' },
-  { name: 'Annual Plan', value: 20, color: '#3b82f6' },
-];
-
-const defaultAttendanceTrend = [
-  { week: 'Week 1', attendance: 420 },
-  { week: 'Week 2', attendance: 485 },
-  { week: 'Week 3', attendance: 510 },
-  { week: 'Week 4', attendance: 495 },
-];
 
 export default function Reports() {
-  const storeLoading = useStore(state => state.loading);
-  const payments = useStore(state => state.payments);
-  const attendance = useStore(state => state.attendance);
-  const members = useStore(state => state.members);
-
-  const [data, setData] = useState<ReportSummary | null>(null);
-
-  useEffect(() => {
-    if (storeLoading) return;
-
-    // Calculate report from store data
-    const totalRevenue = payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + p.amount, 0);
-    const totalExpenses = totalRevenue * 0.35; // Mock 35% expenses
-    const netProfit = totalRevenue - totalExpenses;
-    
-    const uniqueDays = new Set(attendance.map(a => a.date)).size;
-    const avgAttendance = uniqueDays > 0 ? Math.round(attendance.length / uniqueDays) : 0;
-    
-    // Revenue by month
-    const revByMonth: Record<string, number> = {};
-    payments.filter(p => p.status === 'paid').forEach(p => {
-      const m = p.date.slice(0, 7);
-      revByMonth[m] = (revByMonth[m] || 0) + p.amount;
-    });
-    
-    const monthlyRevenueData = Object.entries(revByMonth)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-6)
-      .map(([m, val]) => {
-        const d = new Date(m + '-01');
-        return { 
-          month: d.toLocaleString('en-IN', { month: 'short' }), 
-          revenue: val,
-          expenses: val * 0.35
-        };
-      });
-
-    // Membership distribution
-    const plans: Record<string, number> = {};
-    members.forEach(m => {
-      plans[m.plan] = (plans[m.plan] || 0) + 1;
-    });
-    const colors = ['#fbbf24', '#22c55e', '#3b82f6', '#ef4444'];
-    const membershipDistribution = Object.entries(plans).map(([name, count], i) => ({
-      name,
-      value: Math.round((count / members.length) * 100),
-      color: colors[i % colors.length]
-    }));
-
-    setData({
-      totalRevenue: totalRevenue || 328000,
-      totalExpenses: totalExpenses || 114000,
-      netProfit: netProfit || 214000,
-      avgAttendance: avgAttendance || 478,
-      monthlyRevenueData: monthlyRevenueData.length > 0 ? monthlyRevenueData : defaultRevenueData,
-      membershipDistribution: membershipDistribution.length > 0 ? membershipDistribution : defaultMembershipDistribution,
-      attendanceTrend: defaultAttendanceTrend
-    });
-  }, [storeLoading, payments, attendance, members]);
+  const { data, isLoading: storeLoading } = useRealtimeAnalytics(api.analytics.getReports, null);
 
   const generatePDF = (reportType: string) => {
     try {

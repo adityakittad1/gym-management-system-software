@@ -7,6 +7,10 @@ import {
 } from 'lucide-react';
 import { api, Member, ReminderLog } from '../services/api';
 import { toast } from 'sonner';
+import { useStore } from '../store/useStore';
+import { supabase } from '../services/supabase';
+import { TABLES } from '../services/db-schema';
+import { waTemplates, WATemplate, buildMemberVars } from '../services/wa-templates';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface WAStatus {
@@ -40,26 +44,14 @@ interface BulkProgress {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SOCKET_URL = 'http://localhost:5000';
 
-const DEFAULT_TEMPLATE = `Hello {{member_name}},
-
-Your membership at The Transformation Zone (TTZ) will expire in {{days_remaining}} days on {{expiry_date}}.
-
-Please renew your membership to continue your fitness journey without interruption.
-
-If you have already renewed, kindly ignore this message.
-
-Thank you,
-Team TTZ
-📞 {{contact_number}}`;
-
-const previewTemplate = (template: string, member?: Partial<Member>) =>
-  template
-    .replace(/{{member_name}}/g, member?.name || 'Ravi Sharma')
-    .replace(/{{membership_plan}}/g, member?.plan || 'Monthly Pro')
-    .replace(/{{expiry_date}}/g, member?.expiryDate ? new Date(member.expiryDate).toLocaleDateString('en-IN') : '30 Jun 2026')
-    .replace(/{{days_remaining}}/g, String(member?.daysRemaining ?? 3))
-    .replace(/{{gym_name}}/g, 'The Transformation Zone (TTZ)')
-    .replace(/{{contact_number}}/g, '8668891406');
+const previewTemplate = (templateKey: string, message: string, member?: Partial<Member>) => {
+  const vars = buildMemberVars(
+    { name: member?.name || 'Ravi Sharma', phone: member?.phone || '9876543210', plan: member?.plan || 'Monthly Pro', expiryDate: member?.expiryDate ? new Date(member.expiryDate).toLocaleDateString('en-IN') : '30 Jun 2026', daysRemaining: member?.daysRemaining ?? 3 },
+    { gymName: 'TTZ Fitness', primaryPhone: '8668891406' },
+    { amount: '1,500', invoice_number: 'INV-2026-001', receipt_number: 'REC-2026-001', renewal_date: new Date().toLocaleDateString('en-IN'), coach_name: 'Arjun Singh' }
+  );
+  return waTemplates.renderRaw(message, vars);
+};
 
 // ─── Status label helper ──────────────────────────────────────────────────────
 function statusLabel(s: WAStatus['status']) {
@@ -75,6 +67,7 @@ function statusLabel(s: WAStatus['status']) {
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function WhatsAppHub() {
   const socketRef = useRef<Socket | null>(null);
+  const storeMembers = useStore(state => state.members);
 
   const [waStatus, setWaStatus] = useState<WAStatus>({
     status: 'disconnected', phoneNumber: null, profileName: null,
@@ -88,7 +81,14 @@ export default function WhatsAppHub() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'automation' | 'templates' | 'logs'>('overview');
 
-  const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
+  const allTemplates = waTemplates.getAll();
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState(allTemplates[0].key);
+  const selectedTemplate = waTemplates.get(selectedTemplateKey) || allTemplates[0];
+  const [templateMessage, setTemplateMessage] = useState(selectedTemplate.message);
+
+  useEffect(() => {
+    setTemplateMessage(selectedTemplate.message);
+  }, [selectedTemplateKey]);
   const [rules, setRules] = useState<AutomationRule[]>([
     { id: 'r5', label: '5 Days Before Expiry', days: 5, enabled: true, color: '#fbbf24' },
     { id: 'r3', label: '3 Days Before Expiry', days: 3, enabled: true, color: '#fb923c' },
@@ -129,7 +129,7 @@ export default function WhatsAppHub() {
       socket.on('connect', () => {
         if (!mounted.current) return;
         setSocketConnected(true);
-        console.log('[WA Hub] Socket connected');
+
       });
 
       socket.on('connect_error', (err) => {
@@ -173,23 +173,48 @@ export default function WhatsAppHub() {
 
   // ── Fetch data ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    const fetchData = async () => {
+    let mounted = true;
+    const fetchLogs = async () => {
       try {
         setIsLoading(true);
-        const [membersData, logsData] = await Promise.all([
-          api.members.list().catch(() => []),
-          api.whatsapp.getLogs().catch(() => []),
-        ]);
-        setMembers(membersData);
+        const logsData = await api.whatsapp.getLogs().catch(() => []);
+        if (!mounted) return;
         setLogs(logsData);
       } finally {
-        setIsLoading(false);
+        if (mounted) setIsLoading(false);
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 30000); // refresh every 30s
-    return () => clearInterval(interval);
+    fetchLogs();
+
+    const channel = supabase
+      .channel('public:whatsapp_logs:hub')
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.whatsappLogs }, fetchLogs)
+      .subscribe();
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
+
+  // Fetch initial real status
+  useEffect(() => {
+    let mounted = true;
+    fetch(`${SOCKET_URL}/api/whatsapp/real-status`)
+      .then(res => res.json())
+      .then(data => {
+        if (mounted && data) {
+          setWaStatus(data);
+          if (data.status === 'qr_ready') setQrDataURL(data.qrDataURL || null); // Assuming backend sends qrDataURL or we rely on socket for new QR
+        }
+      })
+      .catch(err => console.warn('[WA Hub] Failed to fetch real status:', err));
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    setMembers(storeMembers);
+  }, [storeMembers]);
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const isConnected = waStatus.status === 'connected';
@@ -201,7 +226,7 @@ export default function WhatsAppHub() {
   const expiring5 = members.filter(m => m.daysRemaining > 0 && m.daysRemaining <= 5);
 
   const eligibleMembers = members.filter(m =>
-    rules.some(r => r.enabled && m.daysRemaining === r.days)
+    m.daysRemaining !== null && m.daysRemaining <= 5 && m.daysRemaining >= -5
   );
 
   const filteredLogs = logs.filter(l => {
@@ -235,6 +260,18 @@ export default function WhatsAppHub() {
       toast.success('WhatsApp disconnected.');
     } catch {
       toast.error('Disconnect failed.');
+    }
+  };
+
+  const handleClearSession = async () => {
+    try {
+      setQrDataURL(null);
+      setWaStatus(prev => ({ ...prev, status: 'disconnected' }));
+      const res = await fetch(`${SOCKET_URL}/api/whatsapp/clear-session`, { method: 'POST' });
+      const data = await res.json();
+      toast.success(data.message || 'Session cleared! Click Connect to get a fresh QR code.');
+    } catch {
+      toast.error('Failed to clear session. Please restart the server manually.');
     }
   };
 
@@ -316,13 +353,8 @@ export default function WhatsAppHub() {
     setBulkProgress({ total: eligibleMembers.length, sent: 0, failed: 0, running: true, done: false });
 
     try {
-      const res = await fetch(`${SOCKET_URL}/api/whatsapp/send-bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ members: eligibleMembers, template }),
-      });
-      const result = await res.json();
-      setBulkProgress({ total: result.total, sent: result.sent, failed: result.failed, running: false, done: true });
+      const result = await api.whatsapp.sendReminders('expiry');
+      setBulkProgress({ total: eligibleMembers.length, sent: result.sent || 0, failed: result.failed || 0, running: false, done: true });
       toast.success(`Bulk send done: ${result.sent} delivered, ${result.failed} failed.`);
       api.whatsapp.getLogs().then(setLogs).catch(() => {});
     } catch {
@@ -392,10 +424,15 @@ export default function WhatsAppHub() {
               </button>
             </>
           ) : (
-            <button onClick={handleConnect} disabled={isConnecting} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '12px', background: isConnecting ? '#27272a' : '#4ade80', border: 'none', color: isConnecting ? '#71717a' : '#000', fontSize: '13px', fontWeight: 700, cursor: isConnecting ? 'not-allowed' : 'pointer', boxShadow: isConnecting ? 'none' : '0 8px 24px rgba(74,222,128,0.25)' }}>
-              {isConnecting ? <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} /> : <QrCode style={{ width: 14, height: 14 }} />}
-              {isConnecting ? 'Connecting…' : 'Connect WhatsApp'}
-            </button>
+            <>
+              <button onClick={handleConnect} disabled={isConnecting} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '12px', background: isConnecting ? '#27272a' : '#4ade80', border: 'none', color: isConnecting ? '#71717a' : '#000', fontSize: '13px', fontWeight: 700, cursor: isConnecting ? 'not-allowed' : 'pointer', boxShadow: isConnecting ? 'none' : '0 8px 24px rgba(74,222,128,0.25)' }}>
+                {isConnecting ? <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} /> : <QrCode style={{ width: 14, height: 14 }} />}
+                {isConnecting ? 'Connecting…' : 'Connect WhatsApp'}
+              </button>
+              <button onClick={handleClearSession} title="Use if QR is stuck or session is expired" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+                <RefreshCw style={{ width: 12, height: 12 }} /> Clear Session
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -617,7 +654,7 @@ export default function WhatsAppHub() {
                   <Send style={{ width: 16, height: 16, color: '#4ade80' }} />
                 </div>
                 <div>
-                  <p style={{ fontSize: '14px', fontWeight: 800, color: 'var(--foreground)', margin: '0 0 2px' }}>Test Delivery</p>
+                  <p style={{ fontSize: '14px', fontWeight: 800, color: 'var(--foreground)', margin: '0 0 2px' }}>Connection Verification</p>
                   <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: 0 }}>Send a manual message</p>
                 </div>
               </div>
@@ -629,7 +666,7 @@ export default function WhatsAppHub() {
             <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(30,30,34,0.9)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '16px', fontWeight: 700, color: 'var(--foreground)', margin: '0 0 4px' }}>Renewal Automation Monitor</h3>
-                <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: 0 }}>{eligibleMembers.length} members eligible based on active rules</p>
+                <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: 0 }}>{eligibleMembers.length} members with 5 days or less remaining (including recently expired)</p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 {bulkProgress.done && !bulkProgress.running && (
@@ -751,22 +788,43 @@ export default function WhatsAppHub() {
       {/* ══════════════════════════ TEMPLATES TAB ══════════════════════════ */}
       {activeTab === 'templates' && (
         <div className="animate-fade-up" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-          <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '20px', overflow: 'hidden' }}>
+          
+          <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '20px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(30,30,34,0.9)' }}>
-              <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '16px', fontWeight: 700, color: 'var(--foreground)', margin: 0 }}>Message Template</h3>
+              <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '16px', fontWeight: 700, color: 'var(--foreground)', margin: '0 0 12px' }}>Message Templates</h3>
+              <select 
+                value={selectedTemplateKey} 
+                onChange={(e) => setSelectedTemplateKey(e.target.value)}
+                style={{ width: '100%', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 16px', color: 'var(--foreground)', fontSize: '14px', outline: 'none' }}
+              >
+                {Array.from(new Set(allTemplates.map(t => t.category))).map(cat => (
+                  <optgroup key={cat} label={cat}>
+                    {allTemplates.filter(t => t.category === cat).map(t => (
+                      <option key={t.key} value={t.key}>{t.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
             </div>
-            <div style={{ padding: '20px 24px' }}>
+            <div style={{ padding: '20px 24px', flex: 1 }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '16px' }}>
-                {['{{member_name}}', '{{membership_plan}}', '{{expiry_date}}', '{{days_remaining}}', '{{gym_name}}', '{{contact_number}}'].map(v => (
-                  <button key={v} onClick={() => setTemplate(prev => prev + v)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', color: '#fbbf24', padding: '4px 10px', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, cursor: 'pointer' }}>{v}</button>
+                {selectedTemplate.variables.map(v => (
+                  <button key={v} onClick={() => setTemplateMessage(prev => prev + '{{' + v + '}}')} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', color: '#fbbf24', padding: '4px 10px', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, cursor: 'pointer' }}>
+                    {'{' + '{' + v + '}' + '}'}
+                  </button>
                 ))}
               </div>
-              <textarea value={template} onChange={e => setTemplate(e.target.value)} rows={13} style={{ width: '100%', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px', color: 'var(--foreground)', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }} />
+              <textarea 
+                value={templateMessage} 
+                onChange={e => setTemplateMessage(e.target.value)} 
+                rows={12} 
+                style={{ width: '100%', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px', color: 'var(--foreground)', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }} 
+              />
               <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-                <button onClick={() => { setTemplate(DEFAULT_TEMPLATE); toast.success('Reset to default.'); }} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted-foreground)', padding: '10px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                <button onClick={() => { waTemplates.reset(selectedTemplateKey); setTemplateMessage(waTemplates.get(selectedTemplateKey)!.message); toast.success('Reset to default.'); }} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted-foreground)', padding: '10px 16px', borderRadius: '12px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                   <RotateCcw style={{ width: 13, height: 13 }} /> Reset
                 </button>
-                <button onClick={() => toast.success('Template saved!')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', background: '#fbbf24', border: 'none', color: '#000', padding: '10px', borderRadius: '12px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                <button onClick={() => { waTemplates.save(selectedTemplateKey, { message: templateMessage }); toast.success('Template saved!'); }} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', background: '#fbbf24', border: 'none', color: '#000', padding: '10px', borderRadius: '12px', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
                   <Save style={{ width: 13, height: 13 }} /> Save Template
                 </button>
               </div>
@@ -774,22 +832,24 @@ export default function WhatsAppHub() {
           </div>
 
           {/* Live Preview */}
-          <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '20px', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '20px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(30,30,34,0.9)' }}>
               <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '16px', fontWeight: 700, color: 'var(--foreground)', margin: 0 }}>Live Preview</h3>
             </div>
-            <div style={{ padding: '24px' }}>
-              <div style={{ background: '#111f11', borderRadius: '16px', padding: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid rgba(74,222,128,0.15)' }}>
-                  <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#4ade80', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 800, color: '#000' }}>T</div>
+            <div style={{ padding: '24px', flex: 1, background: '#0B141A' }}>
+              <div style={{ maxWidth: '100%', margin: '0 auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: '#202C33', borderRadius: '12px' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#4ade80', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 800, color: '#000' }}>T</div>
                   <div>
-                    <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--foreground)', margin: 0 }}>TTZ Fitness</p>
-                    <p style={{ fontSize: '11px', color: '#4ade80', margin: 0 }}>online</p>
+                    <p style={{ fontSize: '15px', fontWeight: 700, color: '#E9EDEF', margin: 0 }}>TTZ Fitness</p>
+                    <p style={{ fontSize: '12px', color: '#8696A0', margin: 0 }}>business account</p>
                   </div>
                 </div>
-                <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '12px 12px 2px 12px', padding: '12px 16px', maxWidth: '90%' }}>
-                  <p style={{ fontSize: '13px', color: '#e4e6eb', lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap' }}>{previewTemplate(template)}</p>
-                  <p style={{ fontSize: '10px', color: 'var(--muted-foreground)', margin: '8px 0 0', textAlign: 'right' }}>{new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} ✓✓</p>
+                <div style={{ background: '#005C4B', borderRadius: '12px 12px 12px 2px', padding: '12px 14px', maxWidth: '90%', marginLeft: '12px', position: 'relative', boxShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
+                  <p style={{ fontSize: '14.2px', color: '#E9EDEF', lineHeight: 1.4, margin: 0, whiteSpace: 'pre-wrap' }}>{previewTemplate(selectedTemplateKey, templateMessage)}</p>
+                  <p style={{ fontSize: '11px', color: '#8696A0', margin: '4px 0 0', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '4px' }}>
+                    {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
                 </div>
               </div>
             </div>
@@ -850,7 +910,7 @@ export default function WhatsAppHub() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
           <div className="animate-fade-up" style={{ background: 'var(--background)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '24px', padding: '32px', width: '100%', maxWidth: '440px', boxShadow: '0 20px 40px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '20px', fontWeight: 800, color: 'var(--foreground)', margin: 0 }}>Test WhatsApp Delivery</h3>
+              <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: '20px', fontWeight: 800, color: 'var(--foreground)', margin: 0 }}>System Connection Verification</h3>
               <button onClick={() => setTestModalOpen(false)} style={{ background: 'transparent', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer' }}><XCircle style={{ width: 24, height: 24 }} /></button>
             </div>
             
@@ -900,7 +960,7 @@ export default function WhatsAppHub() {
                 }}
               >
                 {testStatus === 'sending' ? <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> : <Send style={{ width: 16, height: 16 }} />}
-                {testStatus === 'sending' ? 'Sending...' : 'Send Test Message'}
+                {testStatus === 'sending' ? 'Sending...' : 'Send Verification Ping'}
               </button>
             </form>
           </div>

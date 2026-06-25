@@ -49,69 +49,42 @@ const PAGE_LABELS: Record<string, string> = {
 };
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const saved = localStorage.getItem('ttz_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      localStorage.removeItem('ttz_user');
-      return null;
-    }
-  });
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ttz_user');
-      return saved !== null && JSON.parse(saved) !== null;
-    } catch {
-      return false;
-    }
-  });
-  const [currentPage, setCurrentPage] = useState(() => {
-    try {
-      const savedUser = localStorage.getItem('ttz_user');
-      if (savedUser) {
-        const u = JSON.parse(savedUser) as User;
-        if (u?.role === 'Member') return 'member-portal';
-      }
-    } catch { /* noop */ }
-    return 'dashboard';
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentPage, setCurrentPage] = useState('dashboard');
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [membersFilter, setMembersFilter] = useState<'all' | 'active' | 'expiring' | 'expired'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [pageKey, setPageKey] = useState(0); // forces re-mount animation
   const { theme, setTheme, systemTheme } = useTheme();
 
-  const fetchUnreadCount = async () => {
-    try {
-      const data = await api.notifications.list();
-      setUnreadCount(data.filter((n) => n.isRead === 0).length);
-    } catch { /* offline */ }
-  };
-
   const fetchInitialData = useStore(state => state.fetchInitialData);
+  const notifications = useStore(state => state.notifications);
+  const unreadCount = notifications.filter((n) => n.isRead === 0).length;
+
+  useEffect(() => {
+    // Check real Supabase session on load
+    api.auth.getSession().then((res) => {
+      if (res.success && res.user) {
+        setCurrentUser(res.user);
+        setIsLoggedIn(true);
+        setCurrentPage(res.user.role === 'Member' ? 'member-portal' : 'dashboard');
+      } else {
+        handleLogout();
+      }
+    }).catch(() => handleLogout());
+  }, []);
 
   useEffect(() => {
     if (isLoggedIn && currentUser?.role !== 'Member') {
       fetchInitialData();
-      fetchUnreadCount();
-      const interval = setInterval(fetchUnreadCount, 15000);
-      return () => clearInterval(interval);
     }
   }, [isLoggedIn, currentUser, fetchInitialData]);
-
-  useEffect(() => {
-    if (!showNotifications && isLoggedIn && currentUser?.role !== 'Member') {
-      fetchUnreadCount();
-    }
-  }, [showNotifications, isLoggedIn, currentUser]);
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
     setIsLoggedIn(true);
-    localStorage.setItem('ttz_user', JSON.stringify(user));
     if (user.role === 'Member') {
       setCurrentPage('member-portal');
     } else if (user.role === 'Trainer') {
@@ -121,10 +94,12 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch { /* ignore */ }
     setCurrentUser(null);
     setIsLoggedIn(false);
-    localStorage.removeItem('ttz_user');
     setCurrentPage('dashboard');
   };
 

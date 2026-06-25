@@ -11,9 +11,10 @@
  * Import this ONCE at server startup and call init(io).
  */
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const path = require('path');
+const { supabaseAdmin } = require('./supabase');
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let client = null;
@@ -51,6 +52,46 @@ function broadcastStatus() {
   io.emit('wa:status', getStatus());
 }
 
+async function persistSessionStatus(extra = {}) {
+  try {
+    const persistedStatus = state.status === 'qr_ready'
+      ? 'connecting'
+      : state.status === 'auth_failure'
+        ? 'error'
+        : state.status;
+
+    const row = {
+      session_name: 'default',
+      status: persistedStatus,
+      phone_number: state.phoneNumber,
+      connected_at: state.connectedAt,
+      updated_at: new Date().toISOString(),
+      ...extra,
+    };
+
+    const { data: existing, error: lookupError } = await supabaseAdmin
+      .from('whatsapp_sessions')
+      .select('id')
+      .eq('session_name', 'default')
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
+    if (existing?.id) {
+      const { error } = await supabaseAdmin
+        .from('whatsapp_sessions')
+        .update(row)
+        .eq('id', existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseAdmin.from('whatsapp_sessions').insert([row]);
+      if (error) throw error;
+    }
+  } catch (err) {
+    console.error('[WhatsApp] Failed to persist session status:', err.message);
+  }
+}
+
 function broadcastQR(qrDataURL) {
   if (!io) return;
   io.emit('wa:qr', { qrDataURL });
@@ -67,6 +108,7 @@ function getStatus() {
     sentToday: state.sentToday,
     failedToday: state.failedToday,
     hasQR: !!state.qrDataURL,
+    qrDataURL: state.qrDataURL,
     pairingCode: state.pairingCode,
   };
 }
@@ -95,6 +137,7 @@ async function initialize(socketIO, throwOnError = false) {
   state.status = 'connecting';
   state.qrDataURL = null;
   state.pairingCode = null;
+  persistSessionStatus({ qr_code: null });
   broadcastStatus();
 
   // Resolve Chrome executable — handles pnpm strict hoisting
@@ -123,6 +166,7 @@ async function initialize(socketIO, throwOnError = false) {
   if (!executablePath) {
     console.error('[WhatsApp] No Chrome found. Cannot start WhatsApp session.');
     state.status = 'disconnected';
+    persistSessionStatus();
     broadcastStatus();
     if (throwOnError) throw new Error('No Chrome executable found. Puppeteer cannot start.');
     return;
@@ -149,8 +193,7 @@ async function initialize(socketIO, throwOnError = false) {
       ],
     },
     webVersionCache: {
-      type: 'remote',
-      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1017779847-alpha.html',
+      type: 'none',
     },
   });
 
@@ -171,22 +214,29 @@ async function initialize(socketIO, throwOnError = false) {
       console.error('[WhatsApp] QR generation error:', err);
       state.qrDataURL = null;
     }
+    persistSessionStatus({ qr_code: state.qrDataURL });
     broadcastStatus();
     broadcastQR(state.qrDataURL);
   });
 
   client.on('loading_screen', (percent, message) => {
     console.log(`[WhatsApp] Loading: ${percent}% — ${message}`);
-    state.status = 'connecting';
-    broadcastStatus();
+    if (state.status !== 'connected') {
+      state.status = 'connecting';
+      persistSessionStatus();
+      broadcastStatus();
+    }
   });
 
   client.on('authenticated', () => {
     console.log('[WhatsApp] Authenticated successfully.');
-    state.status = 'connecting';
-    state.qrDataURL = null;
-    state.pairingCode = null;
-    broadcastStatus();
+    if (state.status !== 'connected') {
+      state.status = 'connecting';
+      state.qrDataURL = null;
+      state.pairingCode = null;
+      persistSessionStatus({ qr_code: null });
+      broadcastStatus();
+    }
   });
 
   client.on('ready', async () => {
@@ -207,6 +257,7 @@ async function initialize(socketIO, throwOnError = false) {
       state.profileName = 'TTZ Gym';
     }
 
+    persistSessionStatus({ qr_code: null });
     broadcastStatus();
   });
 
@@ -215,6 +266,7 @@ async function initialize(socketIO, throwOnError = false) {
     state.status = 'auth_failure';
     state.phoneNumber = null;
     state.profileName = null;
+    persistSessionStatus();
     broadcastStatus();
   });
 
@@ -225,6 +277,7 @@ async function initialize(socketIO, throwOnError = false) {
     state.profileName = null;
     state.qrDataURL = null;
     state.pairingCode = null;
+    persistSessionStatus({ qr_code: null });
     broadcastStatus();
   });
 
@@ -241,6 +294,7 @@ async function initialize(socketIO, throwOnError = false) {
   } catch (err) {
     console.error('[WhatsApp] Initialization error (Stack trace):', err.stack || err);
     state.status = 'disconnected';
+    persistSessionStatus();
     broadcastStatus();
     if (throwOnError) throw err;
   }
@@ -264,6 +318,7 @@ async function disconnect() {
   state.qrDataURL = null;
   state.pairingCode = null;
   state.connectedAt = null;
+  persistSessionStatus({ qr_code: null });
   broadcastStatus();
 }
 
@@ -284,6 +339,7 @@ async function requestPairingCode(phone) {
     const code = await client.requestPairingCode(normalizedPhone);
     console.log(`[WhatsApp Debug] Pairing code received: ${code}`);
     state.pairingCode = code;
+    persistSessionStatus();
     broadcastStatus();
     return { success: true, code, normalizedPhone };
   } catch (err) {
@@ -293,7 +349,7 @@ async function requestPairingCode(phone) {
 }
 
 // ─── Send Message ─────────────────────────────────────────────────────────────
-async function sendMessage(phone, message, logContext = {}) {
+async function sendMessage(phone, message, logContext = {}, pdfBase64 = null) {
   if (!client || state.status !== 'connected') {
     throw new Error('WhatsApp is not connected. Please scan the QR code first.');
   }
@@ -333,7 +389,13 @@ async function sendMessage(phone, message, logContext = {}) {
     console.log(`[WhatsApp Debug] ✅ User is registered. Sending message...`);
     state.lastSync = new Date().toISOString();
     
-    const result = await client.sendMessage(chatId, message);
+    let result;
+    if (pdfBase64) {
+      const media = new MessageMedia('application/pdf', pdfBase64, 'Invoice.pdf');
+      result = await client.sendMessage(chatId, message, { media });
+    } else {
+      result = await client.sendMessage(chatId, message);
+    }
     
     console.log(`[WhatsApp Debug] ✅ Delivery Promise resolved! Message ID: ${result.id._serialized}`);
     console.log(`[WhatsApp Debug] ──────────────────────────────────────────\n`);
@@ -359,8 +421,13 @@ async function reconnect(throwOnError = false) {
   await initialize(io, throwOnError);
 }
 
+async function connect(socketIO = io, throwOnError = false) {
+  return initialize(socketIO, throwOnError);
+}
+
 module.exports = {
   initialize,
+  connect,
   disconnect,
   reconnect,
   requestPairingCode,

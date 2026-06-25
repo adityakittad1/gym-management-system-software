@@ -15,10 +15,10 @@ export default function RenewalCenter() {
 
   // Data loaded globally via useStore
 
-  const handleWhatsApp = async (phone: string, name: string) => {
+  const handleWhatsApp = async (id: number | string, name: string) => {
     try {
-      // Trigger whatsapp workflow
-      await api.whatsapp.sendTest(phone, 'whatsapp');
+      // Trigger whatsapp workflow specifically for this member
+      await api.whatsapp.sendReminders(activeTab === 'pending' ? 'payment' : 'expiry', id);
       toast.success(`Reminder sent to ${name}`);
     } catch {
       toast.error('Failed to send reminder');
@@ -133,7 +133,10 @@ export default function RenewalCenter() {
             {activeTab.replace('_', ' ')}
           </h3>
           {activeTab !== 'pending' && (
-            <button style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8', border: 'none', padding: '8px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button onClick={() => {
+                api.whatsapp.sendReminders('expiry').then(() => toast.success('Bulk reminders dispatched'))
+                  .catch(() => toast.error('Failed to dispatch bulk reminders'));
+              }} style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8', border: 'none', padding: '8px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <MessageCircle style={{ width: 14, height: 14 }} /> Bulk WhatsApp Reminder
             </button>
           )}
@@ -200,7 +203,7 @@ export default function RenewalCenter() {
                   </td>
                   <td style={{ padding: '16px 24px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
-                      <button onClick={() => handleWhatsApp(item.phone || '', item.name || item.memberName)} style={{ background: 'rgba(74,222,128,0.1)', border: 'none', color: '#4ade80', width: '32px', height: '32px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }} title="WhatsApp Reminder">
+                      <button onClick={() => handleWhatsApp(item.id, item.name || item.memberName)} style={{ background: 'rgba(74,222,128,0.1)', border: 'none', color: '#4ade80', width: '32px', height: '32px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }} title="WhatsApp Reminder">
                         <MessageCircle style={{ width: 14, height: 14 }} />
                       </button>
                       <button onClick={() => handleCall(item.phone || '')} style={{ background: 'rgba(56,189,248,0.1)', border: 'none', color: '#38bdf8', width: '32px', height: '32px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.2s' }} title="Call">

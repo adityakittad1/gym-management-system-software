@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   ArrowLeft, Phone, MessageCircle, FileText, Printer, Calendar, 
-  Clock, Activity, CreditCard, Camera, Settings, Download, MoreVertical
+  Clock, Activity, CreditCard, Camera, Download, CalendarCheck, FileSpreadsheet
 } from 'lucide-react';
-import { Member } from '../services/api';
+import { api, Member, AttendanceRecord } from '../services/api';
+import { useStore } from '../store/useStore';
 import { toast } from 'sonner';
+import { exportToExcel, exportToPDF } from '../utils/exportUtils';
+import { format } from 'date-fns';
 
 interface MemberProfileProps {
   memberId?: number;
@@ -12,11 +15,51 @@ interface MemberProfileProps {
 }
 
 export default function MemberProfile({ memberId, onBack }: MemberProfileProps) {
-  // In a real app, fetch member by ID. For now, we mock.
   const [activeTab, setActiveTab] = useState<'overview' | 'timeline' | 'attendance' | 'finances'>('overview');
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const members = useStore(state => state.members);
+  const settings = useStore(state => state.settings);
+  
+  const member = members.find(m => m.id === memberId);
+
+  useEffect(() => {
+    if (memberId && activeTab === 'attendance') {
+      api.attendance.list({ memberId }).then(data => {
+        setAttendance(data);
+      }).catch(err => toast.error('Failed to load attendance history'));
+    }
+  }, [memberId, activeTab]);
+
+  if (!member) return null;
 
   const handleAction = (action: string) => {
-    toast.success(`${action} initiated for member.`);
+    toast.success(`${action} initiated for ${member.name}.`);
+  };
+
+  const handleExportExcel = () => {
+    const meta = {
+      title: `${member.name} - Attendance History`,
+      period: 'All Time',
+      generatedBy: 'Admin User',
+      totalRecords: attendance.length,
+      totalPresent: attendance.filter(a => a.status === 'present').length,
+      totalAbsent: attendance.filter(a => a.status === 'absent').length,
+      gymName: settings?.gymName
+    };
+    exportToExcel(attendance, `${member.name}_Attendance`, meta);
+  };
+
+  const handleExportPDF = () => {
+    const meta = {
+      title: `${member.name} - Attendance History`,
+      period: 'All Time',
+      generatedBy: 'Admin User',
+      totalRecords: attendance.length,
+      totalPresent: attendance.filter(a => a.status === 'present').length,
+      totalAbsent: attendance.filter(a => a.status === 'absent').length,
+      gymName: settings?.gymName
+    };
+    exportToPDF(attendance, `${member.name}_Attendance`, meta);
   };
 
   return (
@@ -43,41 +86,26 @@ export default function MemberProfile({ memberId, onBack }: MemberProfileProps) 
       <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', gap: '32px' }}>
         
         {/* Left Column: Identity & Contact */}
-        <div className="animate-fade-up delay-100" style={{ display: 'flex', flexDirection: 'col', gap: '24px' }}>
+        <div className="animate-fade-up delay-100" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           
           <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '32px', textAlign: 'center', width: '100%' }}>
             <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'var(--muted)', margin: '0 auto 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-              <span style={{ fontSize: '40px', fontWeight: 800, color: 'var(--foreground)' }}>A</span>
-              <button style={{ position: 'absolute', bottom: 0, right: 0, background: '#fbbf24', border: 'none', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                <Camera style={{ width: 16, height: 16, color: '#000' }} />
-              </button>
+              <span style={{ fontSize: '40px', fontWeight: 800, color: 'var(--foreground)' }}>{member.name.charAt(0)}</span>
             </div>
-            <h2 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--foreground)', margin: '0 0 8px' }}>Aditya Kittad</h2>
-            <p style={{ fontSize: '14px', color: 'var(--muted-foreground)', margin: '0 0 24px', fontFamily: "'JetBrains Mono', monospace" }}>+91 8668891406</p>
+            <h2 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--foreground)', margin: '0 0 8px' }}>{member.name}</h2>
+            <p style={{ fontSize: '14px', color: 'var(--muted-foreground)', margin: '0 0 24px', fontFamily: "'JetBrains Mono', monospace" }}>{member.phone}</p>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--card)', borderRadius: '12px' }}>
                 <span style={{ color: 'var(--muted-foreground)', fontSize: '12px', fontWeight: 600 }}>Status</span>
-                <span style={{ color: '#4ade80', fontSize: '12px', fontWeight: 700 }}>Active (45 Days Left)</span>
+                <span style={{ color: member.daysRemaining > 0 ? '#4ade80' : '#f87171', fontSize: '12px', fontWeight: 700 }}>
+                  {member.daysRemaining > 0 ? `Active (${member.daysRemaining} Days)` : 'Expired'}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--card)', borderRadius: '12px' }}>
                 <span style={{ color: 'var(--muted-foreground)', fontSize: '12px', fontWeight: 600 }}>Plan</span>
-                <span style={{ color: 'var(--foreground)', fontSize: '12px', fontWeight: 700 }}>Annual Pro</span>
+                <span style={{ color: 'var(--foreground)', fontSize: '12px', fontWeight: 700 }}>{member.plan}</span>
               </div>
-            </div>
-          </div>
-
-          <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '24px', width: '100%' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--foreground)', margin: '0 0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <FileText style={{ width: 16, height: 16, color: '#fbbf24' }} /> Reports & Docs
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <button onClick={() => handleAction('Download Profile PDF')} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '12px', color: 'var(--foreground)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} className="hover:bg-zinc-900">
-                <Printer style={{ width: 16, height: 16 }} /> Print Full Profile
-              </button>
-              <button onClick={() => handleAction('Download Receipt')} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '12px', color: 'var(--foreground)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} className="hover:bg-zinc-900">
-                <Download style={{ width: 16, height: 16 }} /> Latest Invoice PDF
-              </button>
             </div>
           </div>
 
@@ -106,59 +134,90 @@ export default function MemberProfile({ memberId, onBack }: MemberProfileProps) 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
               <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '24px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--foreground)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Activity style={{ width: 16, height: 16, color: '#fbbf24' }} /> Workout Plan
+                  <Activity style={{ width: 16, height: 16, color: '#fbbf24' }} /> Details
                 </h3>
-                <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', lineHeight: 1.6 }}>Assigned: Hypertrophy Split V2<br />Goal: Gain Muscle<br />Trainer: Coach Rajesh</p>
+                <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', lineHeight: 1.6 }}>Join Date: {format(new Date(member.joinDate), 'dd MMM yyyy')}<br />Expiry: {format(new Date(member.expiryDate), 'dd MMM yyyy')}</p>
               </div>
-              <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '24px' }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--foreground)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Activity style={{ width: 16, height: 16, color: '#fbbf24' }} /> Diet Plan
-                </h3>
-                <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', lineHeight: 1.6 }}>Assigned: 3000 kcal Bulking<br />Allergies: None</p>
+            </div>
+          )}
+
+          {activeTab === 'attendance' && (
+            <div className="space-y-6">
+              <div className="flex gap-4 mb-4">
+                <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 bg-green-500/10 text-green-500 border border-green-500/20 rounded-xl hover:bg-green-500/20 text-sm font-bold">
+                  <FileSpreadsheet className="w-4 h-4" /> Export Excel
+                </button>
+                <button onClick={handleExportPDF} className="flex items-center gap-2 px-4 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-xl hover:bg-red-500/20 text-sm font-bold">
+                  <Download className="w-4 h-4" /> Export PDF
+                </button>
               </div>
-              <div style={{ gridColumn: '1 / -1', background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '24px' }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--foreground)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Camera style={{ width: 16, height: 16, color: '#fbbf24' }} /> Transformation Progress
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-                  <div style={{ background: 'var(--card)', height: '160px', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted-foreground)', fontSize: '12px' }}>Day 1</div>
-                  <div style={{ background: 'var(--card)', height: '160px', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted-foreground)', fontSize: '12px' }}>Day 30</div>
-                  <button style={{ background: 'rgba(251,191,36,0.05)', border: '1px dashed rgba(251,191,36,0.3)', height: '160px', borderRadius: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fbbf24', fontSize: '12px', cursor: 'pointer' }}>
-                    <Camera style={{ width: 24, height: 24, marginBottom: '8px' }} />
-                    Add Photo
-                  </button>
+              
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl">
+                  <div className="text-zinc-500 text-xs font-bold uppercase mb-1">Total Visits</div>
+                  <div className="text-2xl font-bold text-white font-mono">{attendance.filter(a => a.status === 'present').length}</div>
                 </div>
+                <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl">
+                  <div className="text-zinc-500 text-xs font-bold uppercase mb-1">Missed Days</div>
+                  <div className="text-2xl font-bold text-red-400 font-mono">{attendance.filter(a => a.status === 'absent').length}</div>
+                </div>
+              </div>
+
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl mt-6">
+                <table className="w-full text-left border-collapse table-premium">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Check-in</th>
+                      <th>Check-out</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attendance.length === 0 ? (
+                      <tr><td colSpan={4} className="p-8 text-center text-zinc-500">No attendance records found.</td></tr>
+                    ) : (
+                      attendance.map(r => (
+                        <tr key={r.id}>
+                          <td className="p-4 border-b border-zinc-800 text-sm font-mono text-zinc-300">
+                            {r.date ? format(new Date(r.date), 'dd MMM yyyy') : '-'}
+                          </td>
+                          <td className="p-4 border-b border-zinc-800 text-sm font-mono text-zinc-300">
+                            {r.checkInTime ? format(new Date(r.checkInTime), 'hh:mm a') : '-'}
+                          </td>
+                          <td className="p-4 border-b border-zinc-800 text-sm font-mono text-zinc-300">
+                            {r.checkOutTime ? format(new Date(r.checkOutTime), 'hh:mm a') : '-'}
+                          </td>
+                          <td className="p-4 border-b border-zinc-800">
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                              r.status === 'present' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
+                              r.status === 'absent' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
+                              'bg-zinc-800 text-zinc-400 border-zinc-700'
+                            }`}>
+                              {r.status || 'unknown'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
 
           {activeTab === 'timeline' && (
             <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '32px' }}>
-              <div style={{ borderLeft: '2px solid rgba(63,63,70,0.5)', paddingLeft: '24px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                <div style={{ position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: '-31px', top: '2px', width: '12px', height: '12px', borderRadius: '50%', background: '#fbbf24', border: '2px solid #0d0d0f' }} />
-                  <span style={{ fontSize: '12px', color: 'var(--muted-foreground)', fontFamily: "'JetBrains Mono', monospace" }}>Today, 10:45 AM</span>
-                  <h4 style={{ fontSize: '14px', color: 'var(--foreground)', margin: '4px 0 2px', fontWeight: 700 }}>Attended Gym</h4>
-                  <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: 0 }}>Scanned at front desk</p>
-                </div>
-                <div style={{ position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: '-31px', top: '2px', width: '12px', height: '12px', borderRadius: '50%', background: '#4ade80', border: '2px solid #0d0d0f' }} />
-                  <span style={{ fontSize: '12px', color: 'var(--muted-foreground)', fontFamily: "'JetBrains Mono', monospace" }}>May 1, 2026</span>
-                  <h4 style={{ fontSize: '14px', color: 'var(--foreground)', margin: '4px 0 2px', fontWeight: 700 }}>Membership Renewed</h4>
-                  <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: 0 }}>Annual Pro plan purchased (₹15,000)</p>
-                </div>
-                <div style={{ position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: '-31px', top: '2px', width: '12px', height: '12px', borderRadius: '50%', background: '#38bdf8', border: '2px solid #0d0d0f' }} />
-                  <span style={{ fontSize: '12px', color: 'var(--muted-foreground)', fontFamily: "'JetBrains Mono', monospace" }}>Apr 28, 2026</span>
-                  <h4 style={{ fontSize: '14px', color: 'var(--foreground)', margin: '4px 0 2px', fontWeight: 700 }}>WhatsApp Reminder Sent</h4>
-                  <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: 0 }}>Automated expiry reminder</p>
-                </div>
-              </div>
+              <p className="text-zinc-500 text-sm">Timeline functionality coming soon...</p>
             </div>
           )}
 
+          {activeTab === 'finances' && (
+            <div style={{ background: 'var(--background)', border: '1px solid rgba(30,30,34,0.9)', borderRadius: '24px', padding: '32px' }}>
+              <p className="text-zinc-500 text-sm">Financial history coming soon...</p>
+            </div>
+          )}
         </div>
-
       </div>
     </div>
   );

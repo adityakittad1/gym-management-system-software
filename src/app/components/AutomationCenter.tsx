@@ -51,10 +51,10 @@ export default function AutomationCenter() {
     if (!testPhone) return toast.error('Enter a phone number');
     try {
       await api.whatsapp.sendTest(testPhone, config.sendMethod);
-      toast.success('Test message sent!');
+      toast.success('System verification ping sent!');
       fetchData(); // refresh logs
     } catch (err: any) {
-      toast.error(err.message || 'Failed to send test message');
+      toast.error(err.message || 'Failed to send verification ping');
     }
   };
 
@@ -246,14 +246,14 @@ export default function AutomationCenter() {
                 </label>
               </div>
 
-              {/* Test Connection */}
+              {/* Connection Verification */}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: '32px', display: 'flex', gap: '16px', alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--muted-foreground)', marginBottom: '8px' }}>Test Phone Number</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--muted-foreground)', marginBottom: '8px' }}>Verification Phone Number</label>
                   <input type="text" value={testPhone} onChange={e => setTestPhone(e.target.value)} style={{ width: '100%', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 16px', color: 'var(--foreground)', fontSize: '14px', outline: 'none' }} placeholder="+91..." />
                 </div>
                 <button type="button" onClick={handleTest} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--foreground)', padding: '12px 24px', borderRadius: '12px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                  Send Test Message
+                  Send Verification Ping
                 </button>
                 <button type="submit" disabled={isSaving} style={{ background: '#fafafa', color: '#09090b', border: 'none', padding: '12px 24px', borderRadius: '12px', fontSize: '13px', fontWeight: 600, cursor: isSaving ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {isSaving ? <RefreshCw style={{ width: 16, height: 16 }} className="animate-spin" /> : <Save style={{ width: 16, height: 16 }} />}

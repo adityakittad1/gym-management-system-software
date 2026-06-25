@@ -11,7 +11,7 @@ import {
   Tooltip, ResponsiveContainer
 } from 'recharts';
 import { api, ActivityRecord, DashboardStats, ChartData, Member, Payment, ActionItem } from '../services/api';
-import { useStore } from '../store/useStore';
+import { useRealtimeAnalytics } from '../hooks/useRealtimeAnalytics';
 import { toast } from 'sonner';
 
 interface DashboardProps {
@@ -325,41 +325,8 @@ function ActionCard({ action, onView, onResolve, onRemind, onDismiss, delay = 0 
   );
 }
 
-/* ---- FALLBACK DATA ---- */
-const FALLBACK_STATS: DashboardStats = {
-  totalMembers: 178, activeMembers: 165, expiredMembers: 13, expiringSoon: 11,
-  monthlyRevenue: 67000, pendingPayments: 2, attendanceToday: 6, totalTrainers: 4
-};
-const FALLBACK_CHARTS: ChartData = {
-  revenueData: [
-    { month: 'Jan', revenue: 45000, expenses: 18000 },
-    { month: 'Feb', revenue: 52000, expenses: 19000 },
-    { month: 'Mar', revenue: 48000, expenses: 17500 },
-    { month: 'Apr', revenue: 61000, expenses: 20000 },
-    { month: 'May', revenue: 55000, expenses: 18500 },
-    { month: 'Jun', revenue: 67000, expenses: 21000 },
-  ],
-  membershipData: [
-    { month: 'Jan', members: 120 }, { month: 'Feb', members: 135 },
-    { month: 'Mar', members: 142 }, { month: 'Apr', members: 158 },
-    { month: 'May', members: 165 }, { month: 'Jun', members: 178 },
-  ],
-  weeklyStats: [
-    { day: 'Mon', count: 85 }, { day: 'Tue', count: 92 }, { day: 'Wed', count: 88 },
-    { day: 'Thu', count: 95 }, { day: 'Fri', count: 78 }, { day: 'Sat', count: 102 }, { day: 'Sun', count: 68 },
-  ],
-  attendanceTrend: [
-    { week: 'Week 1', attendance: 420 }, { week: 'Week 2', attendance: 485 },
-    { week: 'Week 3', attendance: 510 }, { week: 'Week 4', attendance: 495 },
-  ],
-};
 
-const FALLBACK_ACTIONS: ActionItem[] = [
-  { id: 1, type: 'expiry', priority: 'high', title: '3 memberships expire in 5 days', description: 'Amit Kumar, Priya Patel, Arjun Mehta', count: 3, icon: 'calendar' },
-  { id: 2, type: 'payment', priority: 'high', title: '₹2,400 pending collection', description: '2 invoices require payment', count: 2, amount: 2400, icon: 'credit-card' },
-  { id: 3, type: 'inactive', priority: 'medium', title: '4 members have not visited in 10 days', description: 'Vikram Singh, Amit Kumar +2 more', count: 4, icon: 'user-x' },
-  { id: 4, type: 'renewal', priority: 'medium', title: '1 expired membership needs renewal', description: 'Vikram Singh', count: 1, icon: 'refresh-cw' },
-];
+
 
 /* ---- SKELETON ---- */
 function DashboardSkeleton() {
@@ -404,15 +371,12 @@ function activityMeta(type: string): { icon: React.ElementType; color: string; b
    MAIN COMPONENT
    ============================================================ */
 export default function Dashboard({ onPageChange, onFilterChange }: DashboardProps) {
-  const storeLoading = useStore(state => state.loading);
-  const getDashboardStats = useStore(state => state.getDashboardStats);
-  const getDashboardActions = useStore(state => state.getDashboardActions);
-  const getDashboardCharts = useStore(state => state.getDashboardCharts);
-  const activities = useStore(state => state.activities);
+  const { data: stats, isLoading: statsLoading } = useRealtimeAnalytics(api.analytics.getDashboardStats);
+  const { data: actions, isLoading: actionsLoading } = useRealtimeAnalytics(api.analytics.getDashboardActions, []);
+  const { data: charts, isLoading: chartsLoading } = useRealtimeAnalytics(api.analytics.getReports, null);
+  const { data: recentActivity } = useRealtimeAnalytics(api.analytics.getRecentActivity, []);
   
-  const stats = getDashboardStats();
-  const actions = getDashboardActions();
-  const charts = getDashboardCharts();
+  const storeLoading = statsLoading || actionsLoading || chartsLoading;
   
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const [dismissedActions, setDismissedActions] = useState<number[]>([]);
@@ -496,7 +460,7 @@ export default function Dashboard({ onPageChange, onFilterChange }: DashboardPro
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
   const dateStr = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-  const visibleActions = actions.filter(a => !dismissedActions.includes(a.id));
+  const visibleActions = (actions || []).filter((a: ActionItem) => !dismissedActions.includes(a.id));
 
   // Calculate today's revenue from stats
   const pendingTotal = stats.pendingPayments;
@@ -560,6 +524,16 @@ export default function Dashboard({ onPageChange, onFilterChange }: DashboardPro
             subtitle="Total collections this month"
             onClick={() => onPageChange?.('payments')}
             delay={0}
+          />
+          <KPICard
+            label="Net Profit"
+            value={stats.netProfit}
+            prefix="₹"
+            icon={TrendingUp}
+            color="#10b981"
+            subtitle="Current month revenue - expenses"
+            onClick={() => onPageChange?.('reports')}
+            delay={30}
           />
           <KPICard
             label="Today's Attendance"
@@ -690,7 +664,7 @@ export default function Dashboard({ onPageChange, onFilterChange }: DashboardPro
             </div>
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={charts.revenueData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+            <AreaChart data={charts?.monthlyRevenueData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#fbbf24" stopOpacity={0.2} />
@@ -747,7 +721,7 @@ export default function Dashboard({ onPageChange, onFilterChange }: DashboardPro
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            {activities.slice(0, 6).map((activity, idx) => {
+            {(recentActivity || []).slice(0, 6).map((activity: any, idx: number) => {
               const { icon: Icon, color, bg } = activityMeta(activity.type);
               return (
                 <div key={activity.id} style={{

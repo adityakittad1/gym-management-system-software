@@ -9,6 +9,7 @@ import {
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
 import { api, InsightsData } from '../services/api';
+import { useRealtimeAnalytics } from '../hooks/useRealtimeAnalytics';
 
 const PLAN_COLORS: Record<string, string> = {
   Monthly: '#fbbf24',
@@ -101,45 +102,7 @@ function MetricCard({ label, value, icon: Icon, color, suffix, trend, delay = 0 
 }
 
 export default function BusinessInsights() {
-  const [data, setData] = useState<InsightsData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const insights = await api.insights.get();
-        setData(insights);
-      } catch {
-        // Fallback data
-        setData({
-          totalMembers: 178,
-          activeMembers: 165,
-          expiredMembers: 13,
-          expiringMembers: 11,
-          retentionRate: 93,
-          renewalRate: 68,
-          inactiveMembers: 12,
-          topPlans: [
-            { plan: 'Monthly', count: 45 },
-            { plan: 'Quarterly', count: 35 },
-            { plan: 'Annual', count: 20 },
-          ],
-          revenueTrend: [
-            { month: '2026-01', revenue: 45000 },
-            { month: '2026-02', revenue: 52000 },
-            { month: '2026-03', revenue: 48000 },
-            { month: '2026-04', revenue: 61000 },
-            { month: '2026-05', revenue: 55000 },
-            { month: '2026-06', revenue: 67000 },
-          ],
-          expectedMonthlyIncome: 72000,
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
+  const { data, isLoading } = useRealtimeAnalytics(api.analytics.getInsights, null);
 
   if (isLoading || !data) {
     return (
