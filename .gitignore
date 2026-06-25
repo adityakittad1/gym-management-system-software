@@ -1,0 +1,48 @@
+# Environment Variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist
+build
+.next
+out
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Cache and temporary files
+.vercel
+.turbo
+.cache
+.npm
+
+# Server database
+server/gym.db
+server/gym.db-journal
+
+# IDEs and Editors
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
