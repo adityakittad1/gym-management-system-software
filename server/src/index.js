@@ -1,5 +1,9 @@
 
-require('dotenv').config();
+try {
+  require('dotenv').config();
+} catch (e) {
+  console.log('[Startup] dotenv not found, assuming environment variables are injected');
+}
 
 process.on('uncaughtException', (err) => {
   if (err && err.message && err.message.includes('EBUSY')) {

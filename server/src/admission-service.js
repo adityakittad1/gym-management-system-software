@@ -66,7 +66,8 @@ router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
         await Promise.allSettled(promises);
 
         // WhatsApp Hooks
-        const { waTemplates, buildMemberVars } = require('./wa-templates');
+        const { waTemplates, buildMemberVars } = require('./whatsapp-template-engine');
+        const whatsappService = require('./whatsapp-service');
         const { data: settingsRow } = await supabaseAdmin.from('settings').select('*');
         const settings = {};
         if (settingsRow) {
@@ -86,22 +87,14 @@ router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
         // Welcome Message
         const welcomeMsg = waTemplates.render('welcome', vars);
         if (welcomeMsg) {
-          fetch('http://localhost:5000/api/whatsapp/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: memberData.phone, message: welcomeMsg, memberName: memberData.name, messageType: 'welcome' }),
-          }).catch(() => {});
+          whatsappService.sendMessage(memberData.phone, welcomeMsg, { member: memberData.name }).catch(() => {});
         }
 
         // Payment Confirmation (only if paid)
         if (paymentData.status === 'paid') {
           const paymentMsg = waTemplates.render('payment_confirmation', vars);
           if (paymentMsg) {
-            fetch('http://localhost:5000/api/whatsapp/send-message', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ phone: memberData.phone, message: paymentMsg, memberName: memberData.name, messageType: 'payment_confirmation' }),
-            }).catch(() => {});
+            whatsappService.sendMessage(memberData.phone, paymentMsg, { member: memberData.name }).catch(() => {});
           }
         }
       } catch (err) {

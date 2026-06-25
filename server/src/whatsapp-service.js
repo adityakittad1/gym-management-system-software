@@ -140,27 +140,29 @@ async function initialize(socketIO, throwOnError = false) {
   persistSessionStatus({ qr_code: null });
   broadcastStatus();
 
-  // Resolve Chrome executable — handles pnpm strict hoisting
-  let executablePath;
-  try {
-    // pnpm stores packages at project-root/node_modules/.pnpm/...
-    // __dirname is server/src/, so go up 2 levels to reach project root
-    const puppeteerPath = path.join(__dirname, '../../node_modules/.pnpm/puppeteer@24.38.0/node_modules/puppeteer');
-    const pup = require(puppeteerPath);
-    executablePath = pup.executablePath();
-    console.log('[WhatsApp] Chrome resolved:', executablePath);
-  } catch (_) {
+  // Resolve Chrome executable natively via puppeteer
+  let executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (!executablePath) {
     try {
-      // Fallback: system Chrome installs on Windows
-      const fs = require('fs');
-      const candidates = [
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        process.env.CHROME_PATH,
-      ].filter(Boolean);
-      executablePath = candidates.find(p => fs.existsSync(p));
-      if (executablePath) console.log('[WhatsApp] Using system Chrome:', executablePath);
-    } catch (_) {}
+      const pup = require('puppeteer');
+      executablePath = pup.executablePath();
+      console.log('[WhatsApp] Chrome resolved via puppeteer:', executablePath);
+    } catch (_) {
+      try {
+        // Fallback: system Chrome installs on Windows/Linux
+        const fs = require('fs');
+        const candidates = [
+          '/usr/bin/google-chrome',
+          '/usr/bin/google-chrome-stable',
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium',
+          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+        ];
+        executablePath = candidates.find(p => fs.existsSync(p));
+        if (executablePath) console.log('[WhatsApp] Using system Chrome:', executablePath);
+      } catch (_) {}
+    }
   }
 
   if (!executablePath) {
