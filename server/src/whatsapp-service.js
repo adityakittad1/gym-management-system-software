@@ -22,6 +22,8 @@ let io = null;  // Socket.IO instance injected from index.js
 
 const state = {
   status: 'disconnected', // 'disconnected' | 'qr_ready' | 'connecting' | 'connected' | 'auth_failure'
+  currentStage: '[0] Uninitialized',
+  lastDiagnosticError: 'No error recorded.',
   qrDataURL: null,        // base64 PNG of QR for frontend
   pairingCode: null,
   phoneNumber: null,
@@ -134,6 +136,8 @@ async function initialize(socketIO, throwOnError = false) {
     client = null;
   }
 
+  console.log('[Diagnostic] [2] Creating WhatsApp client');
+  state.currentStage = '[2] Creating WhatsApp client';
   state.status = 'connecting';
   state.qrDataURL = null;
   state.pairingCode = null;
@@ -161,6 +165,9 @@ async function initialize(socketIO, throwOnError = false) {
     console.log('[WhatsApp] @sparticuz/chromium not found, falling back to default...');
   }
 
+  console.log('[Diagnostic] [3] Launching Puppeteer');
+  state.currentStage = '[3] Launching Puppeteer';
+
   client = new Client({
     authStrategy: new LocalAuth({
       clientId: 'primary',
@@ -185,6 +192,8 @@ async function initialize(socketIO, throwOnError = false) {
 
   client.on('loading_screen', (percent, message) => {
     logEvent('loading_screen', `${percent}% - ${message}`);
+    console.log(`[Diagnostic] [4] Browser launched / [5] New page created / [6] WhatsApp initialize() - ${percent}%`);
+    state.currentStage = `[6] WhatsApp initialize() - ${percent}%`;
     if (state.status !== 'connected') {
       state.status = 'connecting';
       persistSessionStatus();
@@ -194,6 +203,8 @@ async function initialize(socketIO, throwOnError = false) {
 
   client.on('qr', async (qr) => {
     logEvent('qr', 'QR code generated');
+    console.log('[Diagnostic] [8] QR generated');
+    state.currentStage = '[8] QR generated';
     state.status = 'qr_ready';
     state.pairingCode = null;
     try {
@@ -204,10 +215,12 @@ async function initialize(socketIO, throwOnError = false) {
       });
     } catch (err) {
       console.error('[WhatsApp] QR generation error:', err);
+      state.lastDiagnosticError = 'QR generation error: ' + err.message;
       state.qrDataURL = null;
     }
     persistSessionStatus({ qr_code: state.qrDataURL });
     broadcastStatus();
+    console.log('[Diagnostic] [9] Socket emit - QR Code sent to frontend');
     broadcastQR(state.qrDataURL);
   });
 
@@ -217,6 +230,8 @@ async function initialize(socketIO, throwOnError = false) {
 
   client.on('auth_failure', (msg) => {
     logEvent('auth_failure', msg);
+    console.log(`[Diagnostic] Auth Failure: ${msg}`);
+    state.lastDiagnosticError = `Auth Failure: ${msg}`;
     state.status = 'auth_failure';
     state.phoneNumber = null;
     state.profileName = null;
@@ -226,6 +241,8 @@ async function initialize(socketIO, throwOnError = false) {
 
   client.on('ready', () => {
     logEvent('ready');
+    console.log('[Diagnostic] [10] Client Ready');
+    state.currentStage = '[10] Client Ready';
     state.status = 'connected';
     state.hasQR = false;
     state.qrDataURL = null;
@@ -278,13 +295,15 @@ async function initialize(socketIO, throwOnError = false) {
     logEvent('change_state', stateChange);
   });
 
-  // ── Start ─────────────────────────────────────────────────────────────
   try {
     console.log('[WhatsApp] Calling client.initialize() - launching Puppeteer...');
+    console.log('[Diagnostic] [7] Waiting for QR (or ready)');
+    state.currentStage = '[7] Waiting for QR (or ready)';
     await client.initialize();
   } catch (err) {
     global.whatsappLastError = err.stack || err.message || err.toString();
     console.error('[WhatsApp] Initialization error (Stack trace):', err.stack || err);
+    state.lastDiagnosticError = err.stack || err.message || err.toString();
     state.status = 'disconnected';
     persistSessionStatus();
     broadcastStatus();
@@ -426,4 +445,5 @@ module.exports = {
   sendMessage,
   getStatus,
   getQR,
+  getDiagnosticState: () => state
 };

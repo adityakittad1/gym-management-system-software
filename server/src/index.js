@@ -404,6 +404,7 @@ app.get('/api/whatsapp/real-status', withSupabase({ auth: 'none' }), (req, res) 
 });
 
 app.post('/api/whatsapp/connect', withSupabase({ auth: 'none' }), async (req, res) => {
+  console.log('[Diagnostic] [1] Connect endpoint entered (POST /api/whatsapp/connect)');
   try {
     // Respond immediately so UI doesn't hang
     res.json({ success: true, message: 'WhatsApp initialization started. Check status or scan QR code.' });
@@ -417,6 +418,26 @@ app.post('/api/whatsapp/connect', withSupabase({ auth: 'none' }), async (req, re
     }, 1000);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/whatsapp/diagnostics', (req, res) => {
+  try {
+    const waState = whatsappService.getDiagnosticState ? whatsappService.getDiagnosticState() : {};
+    res.json({
+      backendAlive: true,
+      browserExists: true,
+      browserLaunched: ['[4]', '[5]', '[6]', '[7]', '[8]', '[9]', '[10]'].some(s => waState.currentStage?.includes(s)),
+      whatsappInitialized: ['[6]', '[7]', '[8]', '[9]', '[10]'].some(s => waState.currentStage?.includes(s)),
+      qrGenerated: waState.status === 'qr_ready' || !!waState.qrDataURL,
+      socketConnected: true,
+      frontendConnected: io ? io.engine.clientsCount > 0 : false,
+      currentStage: waState.currentStage || '[0] Uninitialized',
+      lastError: waState.lastDiagnosticError || 'No error recorded.',
+      stack: global.whatsappLastError || 'None'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 });
 
