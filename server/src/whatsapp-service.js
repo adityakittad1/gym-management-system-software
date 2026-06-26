@@ -140,110 +140,34 @@ async function initialize(socketIO, throwOnError = false) {
   persistSessionStatus({ qr_code: null });
   broadcastStatus();
 
-  // Resolve Chrome executable natively via puppeteer
-  let executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
-  
-  if (!executablePath) {
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      const renderCachePath = '/opt/render/project/src/server/puppeteer-browsers/chrome';
-      
-      if (fs.existsSync(renderCachePath)) {
-        const versions = fs.readdirSync(renderCachePath).filter(v => !v.startsWith('.'));
-        for (const version of versions) {
-          const versionDir = path.join(renderCachePath, version);
-          const chromeBin = path.join(versionDir, 'chrome-linux64', 'chrome');
-          
-          if (!fs.existsSync(chromeBin)) {
-            // Find the zip file
-            const zipFiles = fs.readdirSync(versionDir).filter(f => f.endsWith('.zip'));
-            if (zipFiles.length > 0) {
-              const zipPath = path.join(versionDir, zipFiles[0]);
-              console.log('[WhatsApp] Chrome binary missing. Manually unzipping:', zipPath);
-              try {
-                require('child_process').execSync(`unzip -q -o "${zipPath}" -d "${versionDir}"`);
-                console.log('[WhatsApp] Unzip complete.');
-              } catch (e) {
-                console.error('[WhatsApp] Manual unzip failed:', e.message);
-              }
-            }
-          }
+  // Use serverless-optimized chromium
+  let executablePath;
+  let args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--single-process',
+    '--disable-gpu',
+    '--no-zygote'
+  ];
 
-          if (fs.existsSync(chromeBin)) {
-            try {
-              require('child_process').execSync(`chmod +x "${chromeBin}"`);
-            } catch(e) {}
-            executablePath = chromeBin;
-            console.log('[WhatsApp] Found and prepared Chrome in Render cache:', executablePath);
-            break;
-          }
-        }
-      }
-    } catch (_) {}
-  }
-  
-  if (!executablePath) {
-    try {
-      const pup = require('puppeteer');
-      executablePath = pup.executablePath();
-      console.log('[WhatsApp] Chrome resolved via puppeteer:', executablePath);
-    } catch (_) {
-      try {
-        // Fallback: system Chrome installs on Windows/Linux
-        const fs = require('fs');
-        const candidates = [
-          '/usr/bin/google-chrome',
-          '/usr/bin/google-chrome-stable',
-          '/usr/bin/chromium-browser',
-          '/usr/bin/chromium',
-          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
-        ];
-        executablePath = candidates.find(p => fs.existsSync(p));
-        if (executablePath) console.log('[WhatsApp] Using system Chrome:', executablePath);
-      } catch (_) {}
-    }
+  try {
+    const chromium = require('@sparticuz/chromium');
+    executablePath = await chromium.executablePath();
+    args = chromium.args;
+    console.log('[WhatsApp] Using @sparticuz/chromium at:', executablePath);
+  } catch (e) {
+    console.log('[WhatsApp] @sparticuz/chromium not found, falling back to default...');
   }
 
-  if (!executablePath) {
-    console.error('[WhatsApp] No Chrome found. Cannot start WhatsApp session.');
-    state.status = 'disconnected';
-    persistSessionStatus();
-    broadcastStatus();
-    if (throwOnError) throw new Error('No Chrome executable found. Puppeteer cannot start.');
-    return;
-  }
-
-  console.log(`[WhatsApp] Puppeteer will use Chrome at: ${executablePath}`);
-  const sessionDir = path.join(__dirname, '../../.wwebjs_auth');
-
-  client = new Client({
+  const client = new Client({
     authStrategy: new LocalAuth({
-      dataPath: sessionDir,
+      clientId: 'primary',
+      dataPath: path.join(__dirname, '.wwebjs_auth')
     }),
     puppeteer: {
       headless: true,
       executablePath: executablePath || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--single-process',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-extensions',
-        '--disable-sync',
-        '--disable-translate',
-        '--hide-scrollbars',
-        '--metrics-recording-only',
-        '--mute-audio',
-        '--safebrowsing-disable-auto-update'
-      ],
+      args: args
     },
     webVersionCache: {
       type: 'none',
