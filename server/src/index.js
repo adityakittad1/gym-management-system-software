@@ -457,7 +457,7 @@ app.get('/api/whatsapp/diagnostic', async (req, res) => {
     // Advanced Diagnostic
     try {
       report.serverDirList = execSync('ls -la /opt/render/project/src/server', { stdio: 'pipe' }).toString().trim();
-      report.cacheDirList = execSync('ls -la /opt/render/project/src/server/puppeteer-browsers 2>/dev/null || echo "MISSING"', { stdio: 'pipe' }).toString().trim();
+      report.cacheDirList = execSync('find /opt/render/project/src/server/puppeteer-browsers', { stdio: 'pipe' }).toString().trim();
     } catch(e) {
       report.serverDirList = e.message;
     }
