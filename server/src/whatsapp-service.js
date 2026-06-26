@@ -157,22 +157,14 @@ async function initialize(socketIO, throwOnError = false) {
     '--js-flags="--max-old-space-size=120"'
   ];
 
-  try {
-    const chromium = require('@sparticuz/chromium');
-    executablePath = await chromium.executablePath();
-    
-    // Sparticuz args contain --single-process which crashes the browser on memory spikes. 
-    // We filter it out and inject our aggressive memory limiters.
-    const baseArgs = chromium.args || [];
-    args = baseArgs.filter(a => !a.includes('single-process')).concat([
-      '--blink-settings=imagesEnabled=false',
-      '--js-flags="--max-old-space-size=120"'
-    ]);
-    
-    console.log('[WhatsApp] Using @sparticuz/chromium at:', executablePath);
-  } catch (e) {
-    console.log('[WhatsApp] @sparticuz/chromium not found, falling back to default...');
-  }
+  // Use standard Puppeteer bundled Chromium (executes from disk, saving ~150MB RAM compared to Sparticuz tmpfs extraction)
+  let executablePath = undefined;
+  
+  // Inject our aggressive memory limiters
+  args = args.concat([
+    '--blink-settings=imagesEnabled=false',
+    '--js-flags="--max-old-space-size=120"'
+  ]);
 
   console.log('[Diagnostic] [3] Launching Puppeteer');
   state.currentStage = '[3] Launching Puppeteer';
