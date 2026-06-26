@@ -405,12 +405,15 @@ app.get('/api/whatsapp/real-status', withSupabase({ auth: 'none' }), (req, res) 
 
 app.post('/api/whatsapp/connect', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
-    // Respond immediately so UI doesn't hang — WhatsApp init is async (browser launch takes time)
+    // Respond immediately so UI doesn't hang
     res.json({ success: true, message: 'WhatsApp initialization started. Check status or scan QR code.' });
-    // Initialize in background
-    whatsappService.initialize(io).catch(err => {
-      console.error('[WhatsApp] Background init error:', err.message);
-    });
+    
+    // Initialize in background with a delay to ensure HTTP response flushes before Chromium hogs memory
+    setTimeout(() => {
+      whatsappService.initialize(io).catch(err => {
+        console.error('[WhatsApp] Background init error:', err.message);
+      });
+    }, 1000);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

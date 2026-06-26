@@ -192,6 +192,7 @@ async function initialize(socketIO, throwOnError = false) {
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
+        '--single-process'
       ],
     },
     webVersionCache: {
