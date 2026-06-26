@@ -9,10 +9,14 @@ const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL;
 
-if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY || !SUPABASE_SECRET_KEY || !SUPABASE_JWKS_URL) {
-  console.error('[FATAL] Missing required Supabase environment variables. Halting startup.');
+if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY || !SUPABASE_SECRET_KEY) {
+  console.error('[FATAL] Missing required Supabase environment variables (URL, PUBLISHABLE_KEY, SECRET_KEY). Halting startup.');
   process.exit(1);
 }
+
+// JWKS URL: default to standard Supabase JWKS endpoint if not explicitly set
+const effectiveJwksUrl = SUPABASE_JWKS_URL || `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`;
+console.log('[SUPABASE] JWKS URL:', effectiveJwksUrl);
 
 // Create centralized clients
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
@@ -21,7 +25,9 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
 
 // Setup JWKS client
 const client = jwksClient({
-  jwksUri: SUPABASE_JWKS_URL,
+  jwksUri: effectiveJwksUrl,
+  cache: true,
+  cacheMaxAge: 86400000, // 24h
 });
 
 function getKey(header, callback) {
@@ -94,35 +100,36 @@ function withSupabase(options = { auth: 'user' }) {
 
 async function validateSupabaseConnection() {
   try {
-    const expectedTables = [
-      'profiles', 'members', 'payments', 'attendance', 'trainers', 'expenses',
-      'leads', 'visitors', 'workouts', 'diet_plans', 'notifications',
-      'settings', 'activities', 'audit_logs', 'whatsapp_sessions',
-      'whatsapp_templates', 'whatsapp_logs', 'automation_rules',
-      'message_queue', 'delivery_history'
-    ];
-    const missing = [];
-    
-    for (const table of expectedTables) {
-      const { error } = await supabaseAdmin.from(table).select('*', { count: 'exact', head: true });
-      if (error && error.code === 'PGRST205') {
-        missing.push(table);
-      } else if (error && error.code !== 'PGRST116') {
-        // PGRST116 = no rows found (table exists but is empty) — that's fine
-        // Ignore other non-critical errors on startup
-        console.warn(`[SUPABASE] Warning on table "${table}": ${error.message}`);
+    // Simple connectivity test — just check the members table
+    const { error } = await supabaseAdmin
+      .from('members')
+      .select('id', { count: 'exact', head: true })
+      .limit(1);
+
+    if (error && error.code !== 'PGRST116') {
+      console.warn('[SUPABASE] Connection warning on members table:', error.message);
+      if (error.code === 'PGRST205') {
+        console.warn('[WARNING] "members" table not found — run supabase_migration.sql first!');
       }
+    } else {
+      console.log('[SUPABASE] Connection verified successfully.');
     }
 
-    if (missing.length > 0) {
-      console.warn('[WARNING] Connected to Supabase, but the following tables are missing:');
-      console.warn(JSON.stringify(missing, null, 2));
-    } else {
-      console.log('[SUPABASE] Connection and tables verified successfully.');
+    // Check members_view exists (critical for analytics)
+    const { error: viewError } = await supabaseAdmin
+      .from('members_view')
+      .select('id', { count: 'exact', head: true })
+      .limit(1);
+
+    if (viewError && viewError.code === 'PGRST205') {
+      console.warn('[WARNING] "members_view" not found — run supabase_migration.sql first!');
+    } else if (!viewError) {
+      console.log('[SUPABASE] members_view verified.');
     }
+
   } catch (err) {
-    console.error('[FATAL] Failed to connect to Supabase:', err.message);
-    process.exit(1);
+    // Non-fatal: log but do NOT exit. Server can still serve requests.
+    console.error('[SUPABASE] Connection validation failed:', err.message);
   }
 }
 
