@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "postinstall": "rm -rf /opt/render/.cache/puppeteer/chrome && npx puppeteer browsers install chrome"
+    "postinstall": "rm -rf /opt/render/project/puppeteer/chrome && npx puppeteer browsers install chrome"
   },
   "engines": {
     "node": ">=18"
