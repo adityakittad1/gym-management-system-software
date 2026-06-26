@@ -466,7 +466,7 @@ app.get('/api/whatsapp/diagnostic', async (req, res) => {
     let foundChrome = null;
     try {
       // Search in project root and .cache
-      const findCmd = `find /opt/render/project -type f -executable 2>/dev/null | grep -i chrome | head -n 1`;
+      const findCmd = `find /opt/render/project -type f -name "chrome" -executable 2>/dev/null | head -n 1`;
       const out = execSync(findCmd, { stdio: 'pipe' }).toString().trim();
       if (out) {
         foundChrome = out;
