@@ -142,6 +142,30 @@ async function initialize(socketIO, throwOnError = false) {
 
   // Resolve Chrome executable natively via puppeteer
   let executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+  
+  if (!executablePath) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const renderCachePath = '/opt/render/project/src/server/puppeteer-browsers/chrome';
+      
+      if (fs.existsSync(renderCachePath)) {
+        const versions = fs.readdirSync(renderCachePath).filter(v => !v.startsWith('.'));
+        for (const version of versions) {
+          const chromeBin = path.join(renderCachePath, version, 'chrome-linux64', 'chrome');
+          if (fs.existsSync(chromeBin)) {
+            try {
+              require('child_process').execSync(`chmod +x "${chromeBin}"`);
+            } catch(e) {}
+            executablePath = chromeBin;
+            console.log('[WhatsApp] Found and prepared Chrome in Render cache:', executablePath);
+            break;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  
   if (!executablePath) {
     try {
       const pup = require('puppeteer');
