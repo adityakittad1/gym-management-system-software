@@ -304,6 +304,7 @@ async function initialize(socketIO, throwOnError = false) {
     console.log('[WhatsApp] Calling client.initialize() - launching Puppeteer...');
     await client.initialize();
   } catch (err) {
+    global.whatsappLastError = err.stack || err.message || err.toString();
     console.error('[WhatsApp] Initialization error (Stack trace):', err.stack || err);
     state.status = 'disconnected';
     persistSessionStatus();

@@ -411,12 +411,17 @@ app.post('/api/whatsapp/connect', withSupabase({ auth: 'none' }), async (req, re
     // Initialize in background with a delay to ensure HTTP response flushes before Chromium hogs memory
     setTimeout(() => {
       whatsappService.initialize(io).catch(err => {
+        global.whatsappLastError = err.stack || err.message || err.toString();
         console.error('[WhatsApp] Background init error:', err.message);
       });
     }, 1000);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/whatsapp/last-error', (req, res) => {
+  res.json({ lastError: global.whatsappLastError || 'No error recorded.' });
 });
 
 app.post('/api/whatsapp/pairing-code', withSupabase({ auth: 'none' }), async (req, res) => {
