@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "postinstall": "PUPPETEER_CACHE_DIR=/opt/render/project/src/server/.cache/puppeteer npx puppeteer browsers install chrome"
   },
   "engines": {
     "node": ">=18"
