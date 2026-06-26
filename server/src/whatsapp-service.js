@@ -142,27 +142,51 @@ async function initialize(socketIO, throwOnError = false) {
 
   // Resolve Chrome executable natively via puppeteer
   let executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+  
   if (!executablePath) {
     try {
-      const pup = require('puppeteer');
-      executablePath = pup.executablePath();
-      console.log('[WhatsApp] Chrome resolved via puppeteer:', executablePath);
+      const fs = require('fs');
+      const path = require('path');
+      
+      // On Render, we force the cache to /opt/render/project/puppeteer
+      const renderCachePath = '/opt/render/project/puppeteer/chrome';
+      if (fs.existsSync(renderCachePath)) {
+        const versions = fs.readdirSync(renderCachePath);
+        for (const version of versions) {
+          const chromeBin = path.join(renderCachePath, version, 'chrome-linux64', 'chrome');
+          if (fs.existsSync(chromeBin)) {
+            executablePath = chromeBin;
+            console.log('[WhatsApp] Found Chrome in Render cache:', executablePath);
+            break;
+          }
+        }
+      }
+      
+      if (!executablePath) {
+        const pup = require('puppeteer');
+        executablePath = pup.executablePath();
+        console.log('[WhatsApp] Chrome resolved via puppeteer:', executablePath);
+      }
     } catch (_) {
-      try {
-        // Fallback: system Chrome installs on Windows/Linux
-        const fs = require('fs');
-        const candidates = [
-          '/usr/bin/google-chrome',
-          '/usr/bin/google-chrome-stable',
-          '/usr/bin/chromium-browser',
-          '/usr/bin/chromium',
-          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
-        ];
-        executablePath = candidates.find(p => fs.existsSync(p));
-        if (executablePath) console.log('[WhatsApp] Using system Chrome:', executablePath);
-      } catch (_) {}
+      executablePath = null;
     }
+  }
+
+  if (!executablePath) {
+    try {
+      // Fallback: system Chrome installs on Windows/Linux
+      const fs = require('fs');
+      const candidates = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+      ];
+      executablePath = candidates.find(p => fs.existsSync(p));
+      if (executablePath) console.log('[WhatsApp] Using system Chrome:', executablePath);
+    } catch (_) {}
   }
 
   if (!executablePath) {
