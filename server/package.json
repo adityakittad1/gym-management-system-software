@@ -1,12 +1,12 @@
 {
   "name": "gym-dashboard-server",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "postinstall": "rm -rf ~/.cache/puppeteer && npx puppeteer browsers install chrome"
   },
   "engines": {
     "node": ">=18"
