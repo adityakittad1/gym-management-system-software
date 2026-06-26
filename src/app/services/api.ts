@@ -9,7 +9,7 @@
 import { supabase } from './supabase';
 import { TABLES, VIEWS, SELECTS } from './db-schema';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gym-management-system-software-backend.onrender.com';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
