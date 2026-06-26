@@ -473,7 +473,7 @@ app.get('/api/whatsapp/diagnostic', async (req, res) => {
       // Fallback manual check
       const candidates = [
         process.env.PUPPETEER_EXECUTABLE_PATH,
-        '/opt/render/project/src/server/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome',
+        '/opt/render/project/src/server/puppeteer-browsers/chrome/linux-148.0.7778.97/chrome-linux64/chrome',
         '/usr/bin/google-chrome-stable',
         '/usr/bin/google-chrome',
         '/usr/bin/chromium-browser'
