@@ -210,12 +210,25 @@ async function initialize(socketIO, throwOnError = false) {
   });
 
   // ── Events ──────────────────────────────────────────────────────────────
-  
+  const logEvent = (evt, payload = '') => {
+    const timestamp = new Date().toISOString();
+    console.log(`[WhatsApp Event] ${timestamp} | ${evt} | ${payload}`);
+    state.lastEvent = evt;
+  };
+
+  client.on('loading_screen', (percent, message) => {
+    logEvent('loading_screen', `${percent}% - ${message}`);
+    if (state.status !== 'connected') {
+      state.status = 'connecting';
+      persistSessionStatus();
+      broadcastStatus();
+    }
+  });
+
   client.on('qr', async (qr) => {
-    console.log('[WhatsApp] QR code received — scan to connect.');
+    logEvent('qr', 'QR code generated');
     state.status = 'qr_ready';
     state.pairingCode = null;
-    // Convert the raw QR string to a PNG data URL
     try {
       state.qrDataURL = await qrcode.toDataURL(qr, {
         width: 300,
@@ -231,35 +244,28 @@ async function initialize(socketIO, throwOnError = false) {
     broadcastQR(state.qrDataURL);
   });
 
-  client.on('loading_screen', (percent, message) => {
-    console.log(`[WhatsApp] Loading: ${percent}% — ${message}`);
-    if (state.status !== 'connected') {
-      state.status = 'connecting';
-      persistSessionStatus();
-      broadcastStatus();
-    }
-  });
-
   client.on('authenticated', () => {
-    console.log('[WhatsApp] Authenticated successfully.');
-    if (state.status !== 'connected') {
-      state.status = 'connecting';
-      state.qrDataURL = null;
-      state.pairingCode = null;
-      persistSessionStatus({ qr_code: null });
-      broadcastStatus();
-    }
+    logEvent('authenticated');
   });
 
-  client.on('ready', async () => {
-    console.log('[WhatsApp] Client ready!');
+  client.on('auth_failure', (msg) => {
+    logEvent('auth_failure', msg);
+    state.status = 'auth_failure';
+    state.phoneNumber = null;
+    state.profileName = null;
+    persistSessionStatus();
+    broadcastStatus();
+  });
+
+  client.on('ready', () => {
+    logEvent('ready');
     state.status = 'connected';
+    state.hasQR = false;
     state.qrDataURL = null;
     state.pairingCode = null;
     state.connectedAt = new Date().toISOString();
     state.lastSync = new Date().toISOString();
 
-    // Fetch phone & profile
     try {
       const info = client.info;
       state.phoneNumber = info?.wid?.user ? `+${info.wid.user}` : 'Unknown';
@@ -273,17 +279,8 @@ async function initialize(socketIO, throwOnError = false) {
     broadcastStatus();
   });
 
-  client.on('auth_failure', (msg) => {
-    console.error('[WhatsApp] Auth failure:', msg);
-    state.status = 'auth_failure';
-    state.phoneNumber = null;
-    state.profileName = null;
-    persistSessionStatus();
-    broadcastStatus();
-  });
-
   client.on('disconnected', (reason) => {
-    console.log('[WhatsApp] Disconnected:', reason);
+    logEvent('disconnected', reason);
     state.status = 'disconnected';
     state.phoneNumber = null;
     state.profileName = null;
@@ -291,12 +288,27 @@ async function initialize(socketIO, throwOnError = false) {
     state.pairingCode = null;
     persistSessionStatus({ qr_code: null });
     broadcastStatus();
+    handleClearSession(io);
+  });
+
+  client.on('message', async msg => {
+    logEvent('message', `Received from ${msg.from}`);
+    if (msg.body === '!ping') {
+      msg.reply('pong');
+    }
   });
 
   client.on('message_ack', (msg, ack) => {
-    // ack: 1=sent, 2=delivered, 3=read
     state.lastSync = new Date().toISOString();
     broadcastStatus();
+  });
+
+  client.on('remote_session_saved', () => {
+    logEvent('remote_session_saved');
+  });
+
+  client.on('change_state', stateChange => {
+    logEvent('change_state', stateChange);
   });
 
   // ── Start ─────────────────────────────────────────────────────────────

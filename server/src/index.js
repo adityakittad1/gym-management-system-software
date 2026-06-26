@@ -429,93 +429,121 @@ app.get('/api/whatsapp/diagnostic', async (req, res) => {
   const path = require('path');
   const { execSync } = require('child_process');
   
-  const report = {};
+  const report = {
+    browserExists: false,
+    browserPath: null,
+    browserVersion: null,
+    puppeteerVersion: null,
+    whatsappVersion: null,
+    nodeVersion: process.version,
+    launchTest: 'skipped',
+    sessionExists: false,
+    sessionPath: null,
+    currentState: 'unknown',
+    lastEvent: 'none',
+    lastError: null,
+    stack: null
+  };
   
   try {
-    report.nodeVersion = process.version;
-    
     try {
       report.puppeteerVersion = require('puppeteer/package.json').version;
     } catch(e) { report.puppeteerVersion = e.message; }
     
     try {
-      report.whatsappWebJsVersion = require('whatsapp-web.js/package.json').version;
-    } catch(e) { report.whatsappWebJsVersion = e.message; }
+      report.whatsappVersion = require('whatsapp-web.js/package.json').version;
+    } catch(e) { report.whatsappVersion = e.message; }
     
-    let resolvedPath = null;
-    let manualFinds = [];
-    const renderCachePath = '/opt/render/project/puppeteer/chrome';
-    if (fs.existsSync(renderCachePath)) {
-      const versions = fs.readdirSync(renderCachePath);
-      for (const version of versions) {
-        const p = path.join(renderCachePath, version, 'chrome-linux64', 'chrome');
-        if (fs.existsSync(p)) manualFinds.push(p);
-      }
-    }
-    report.manualSearchFound = manualFinds;
-    
-    let defaultPupPath = null;
+    // Find Chrome using native find command to eliminate all guessing
+    let foundChrome = null;
     try {
-      const pup = require('puppeteer');
-      defaultPupPath = pup.executablePath();
-    } catch(e) { defaultPupPath = e.message; }
-    report.defaultPuppeteerPath = defaultPupPath;
-    
-    const executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || manualFinds[0] || defaultPupPath;
-    report.usedExecutablePath = executablePath;
-    
-    report.exists = false;
-    if (executablePath && typeof executablePath === 'string') {
-      try {
-        report.exists = fs.existsSync(executablePath);
-      } catch(e) { report.exists = e.message; }
-      
-      report.permissions = 'unknown';
-      try {
-        fs.accessSync(executablePath, fs.constants.X_OK);
-        report.permissions = 'executable';
-      } catch (e) {
-        report.permissions = e.message;
+      // Search in project root and .cache
+      const findCmd = `find /opt/render/project -type f -name "chrome" -executable 2>/dev/null | head -n 1`;
+      const out = execSync(findCmd, { stdio: 'pipe' }).toString().trim();
+      if (out) {
+        foundChrome = out;
+        report.browserExists = true;
+        report.browserPath = foundChrome;
       }
-      
-      report.directExecution = 'skipped';
-      try {
-        const out = execSync(`"${executablePath}" --version`, { stdio: 'pipe' }).toString();
-        report.directExecution = out.trim();
-      } catch(e) {
-        report.directExecution = {
-          message: e.message,
-          stdout: e.stdout ? e.stdout.toString() : '',
-          stderr: e.stderr ? e.stderr.toString() : ''
-        };
+    } catch(e) {
+      // Find command failed
+    }
+
+    if (!foundChrome) {
+      // Fallback manual check
+      const candidates = [
+        process.env.PUPPETEER_EXECUTABLE_PATH,
+        '/opt/render/project/src/server/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser'
+      ];
+      for (const p of candidates) {
+        if (p && fs.existsSync(p)) {
+          foundChrome = p;
+          report.browserExists = true;
+          report.browserPath = foundChrome;
+          break;
+        }
       }
     }
-    
-    report.puppeteerLaunch = 'skipped';
-    if (report.exists === true && report.permissions === 'executable') {
+
+    if (foundChrome) {
+      try {
+        const v = execSync(`"${foundChrome}" --version`, { stdio: 'pipe' }).toString().trim();
+        report.browserVersion = v;
+      } catch(e) {
+        report.browserVersion = `Failed to get version: ${e.message}`;
+        report.lastError = e.message;
+        report.stack = e.stderr ? e.stderr.toString() : e.stack;
+      }
+    }
+
+    // Phase 2 - Launch Test
+    if (report.browserExists) {
       try {
         const pup = require('puppeteer');
         const browser = await pup.launch({
           headless: true,
-          executablePath: executablePath,
+          executablePath: foundChrome,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
         });
         const page = await browser.newPage();
-        await page.goto('about:blank');
+        await page.goto('https://example.com');
         await page.close();
         await browser.close();
-        report.puppeteerLaunch = 'Success';
+        report.launchTest = 'passed';
       } catch(e) {
-        report.puppeteerLaunch = {
-          message: e.message,
-          stack: e.stack
-        };
+        report.launchTest = 'failed';
+        report.lastError = e.message;
+        report.stack = e.stack;
+      }
+    } else {
+      report.lastError = 'Browser executable not found anywhere in /opt/render/project';
+    }
+
+    // Phase 5 - Session Verification
+    const sessionDir = path.join(__dirname, '.wwebjs_auth');
+    if (fs.existsSync(sessionDir)) {
+      report.sessionExists = true;
+      report.sessionPath = sessionDir;
+    }
+    
+    // Import state from whatsapp service
+    const { state } = require('./whatsapp-service');
+    if (state) {
+      report.currentState = state.status;
+      report.lastEvent = state.lastEvent || 'none';
+      if (!report.lastError && global.whatsappLastError) {
+        report.lastError = global.whatsappLastError;
       }
     }
 
     res.json(report);
   } catch (err) {
-    res.status(500).json({ fatal: err.message, stack: err.stack, partialReport: report });
+    report.lastError = err.message;
+    report.stack = err.stack;
+    res.status(500).json(report);
   }
 });
 
