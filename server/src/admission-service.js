@@ -45,6 +45,8 @@ router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
       emergency_contact_name:  memberData.emergencyContactName || null,
       blood_group:    memberData.bloodGroup || null,
       medical_conditions: memberData.medicalConditions || null,
+      before_image:   memberData.beforeImage || null,
+      after_image:    memberData.afterImage || null,
     };
 
     const { data: member, error: memberError } = await supabaseAdmin
@@ -98,6 +100,26 @@ router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
         .update({ deleted_at: new Date().toISOString() })
         .eq('id', memberId);
       throw new Error(`Payment recording failed: ${paymentError.message}`);
+    }
+
+    // ── STEP 2.5: Insert Initial Measurements ─────────────────────────────────
+    if (memberData.weight || memberData.bodyFat || memberData.height) {
+      const measurementInsert = {
+        member_id: memberId,
+        date: new Date().toISOString().split('T')[0],
+        weight: Number(memberData.weight) || null,
+        body_fat: Number(memberData.bodyFat) || null,
+        // Optional: map other fields if UI sends them in the future
+      };
+      
+      const { error: measureError } = await supabaseAdmin
+        .from('measurements')
+        .insert([measurementInsert]);
+        
+      if (measureError) {
+        console.error('[Admission] Initial measurement insert error:', measureError);
+        // Not failing the whole admission if measurements fail, just logging it
+      }
     }
 
     // ── STEP 3: Fire-and-forget Secondary Hooks ────────────────────────────────

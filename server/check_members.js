@@ -4,15 +4,15 @@ const client = new Client({
   ssl: { rejectUnauthorized: false }
 });
 
-async function checkTrainers() {
+async function checkMembers() {
   await client.connect();
   const res = await client.query(`
     SELECT column_name 
     FROM information_schema.columns 
-    WHERE table_name = 'trainers';
+    WHERE table_name = 'members';
   `);
-  console.log('TRAINERS COLUMNS:', res.rows.map(r => r.column_name));
+  console.log('MEMBERS COLUMNS:', res.rows.map(r => r.column_name));
   await client.end();
 }
 
-checkTrainers();
+checkMembers();

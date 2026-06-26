@@ -3,26 +3,24 @@ const client = new Client({
   connectionString: 'postgresql://postgres:8796700769ttz@db.opgvkocbpnvutoagyfhc.supabase.co:5432/postgres',
   ssl: { rejectUnauthorized: false }
 });
-async function check() {
+
+async function enableRealtime() {
   await client.connect();
   try {
-    const tables = ['members', 'payments', 'attendance', 'trainers', 'notifications', 'activities', 'settings', 'expenses', 'leads', 'visitors'];
-    for (const table of tables) {
-      try {
-        await client.query(`ALTER PUBLICATION supabase_realtime ADD TABLE public.${table};`);
-        console.log(`Added ${table} to realtime publication.`);
-      } catch (err) {
-        if (err.code === '42704') {
-            console.error(`Error: publication supabase_realtime does not exist!`);
-        } else if (err.code === '42704') {
-            // Already added
-        } else {
-            console.error(`Could not add ${table}:`, err.message);
-        }
-      }
-    }
+    // Add tables to supabase_realtime publication
+    await client.query(`
+      begin;
+      drop publication if exists supabase_realtime;
+      create publication supabase_realtime;
+      commit;
+      alter publication supabase_realtime add table members, payments, expenses, attendance, trainers;
+    `);
+    console.log('Realtime enabled for tables.');
+  } catch (err) {
+    console.error(err);
   } finally {
     await client.end();
   }
 }
-check();
+
+enableRealtime();
