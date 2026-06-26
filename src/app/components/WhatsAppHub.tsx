@@ -42,7 +42,7 @@ interface BulkProgress {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const SOCKET_URL = 'http://localhost:5000';
+const SOCKET_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 const previewTemplate = (templateKey: string, message: string, member?: Partial<Member>) => {
   const vars = buildMemberVars(

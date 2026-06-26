@@ -37,10 +37,22 @@ const logger = require('./logger');
 const app = express();
 const httpServer = http.createServer(app);
 
+// Trust proxy — required for Render (behind load balancer)
+app.set('trust proxy', 1);
+
+const ALLOWED_ORIGINS = [
+  'https://gym-management-system-software-serv.vercel.app',
+  'https://gym-management-system-software-serv-git-main-adityakittad1.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+];
+
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: '*',
+    origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
@@ -55,8 +67,12 @@ io.on('connection', (socket) => {
   });
 });
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: ALLOWED_ORIGINS,
+  credentials: true,
+}));
+app.use(express.json({ limit: '10mb' }));
+
 
 // Health Endpoints
 app.use('/health', healthRoutes);
@@ -138,15 +154,99 @@ const createCrudEndpoints = (table) => {
 
 ['members', 'payments', 'attendance', 'trainers', 'expenses', 'leads', 'visitors', 'workouts', 'diet_plans', 'notifications', 'settings', 'activities'].forEach(createCrudEndpoints);
 
-// Auth is handled entirely by the frontend via Supabase Auth.
-// No custom backend login endpoints are required.
-
-// Auth is handled entirely by the frontend via Supabase Auth.
-// No custom backend login endpoints are required.
-
 // Use specialized routers
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/admission', admissionRouter);
+
+// ── Dashboard Action Items ────────────────────────────────────────────────────
+app.get('/api/dashboard/actions', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const { data: members } = await supabaseAdmin.from('members_view').select('id, status, days_remaining');
+    const { data: payments } = await supabaseAdmin.from('payments').select('id, status');
+    
+    const expiring7 = (members || []).filter(m => m.days_remaining >= 0 && m.days_remaining <= 7);
+    const expired = (members || []).filter(m => m.status === 'expired');
+    const pending = (payments || []).filter(p => p.status === 'pending');
+    
+    const actions = [];
+    if (expiring7.length > 0) {
+      actions.push({ id: 1, type: 'expiry', priority: 'high', title: 'Memberships Expiring Soon', description: `${expiring7.length} members expiring within 7 days`, count: expiring7.length, icon: '⏰', affectedIds: expiring7.map(m => m.id) });
+    }
+    if (expired.length > 0) {
+      actions.push({ id: 2, type: 'renewal', priority: 'medium', title: 'Expired Memberships', description: `${expired.length} memberships have expired`, count: expired.length, icon: '❌', affectedIds: expired.map(m => m.id) });
+    }
+    if (pending.length > 0) {
+      actions.push({ id: 3, type: 'payment', priority: 'medium', title: 'Pending Payments', description: `${pending.length} payments pending`, count: pending.length, icon: '💰' });
+    }
+    
+    res.json(actions);
+  } catch (err) {
+    res.json([]);
+  }
+});
+
+// ── Recent Activity Feed ──────────────────────────────────────────────────────
+app.get('/api/dashboard/recent-activity', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('activities')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    res.json([]);
+  }
+});
+
+// ── Coaches (alias for trainers with stats) ───────────────────────────────────
+app.get('/api/coaches', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const { data: trainers, error } = await supabaseAdmin
+      .from('trainers')
+      .select('*')
+      .is('deleted_at', null)
+      .order('id', { ascending: true });
+    if (error) throw error;
+    
+    // Enrich with member counts
+    const enriched = await Promise.all((trainers || []).map(async (t) => {
+      const { count } = await supabaseAdmin
+        .from('members')
+        .select('id', { count: 'exact', head: true })
+        .eq('trainer_id', t.id)
+        .is('deleted_at', null);
+      return { ...t, assignedMembers: count || 0 };
+    }));
+    
+    res.json({ success: true, data: enriched });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Business Insights ─────────────────────────────────────────────────────────
+app.get('/api/business-insights', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const result = await fetch(`http://localhost:${process.env.PORT || 5001}/api/analytics/insights`);
+    const data = await result.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Reports (proxy to analytics) ─────────────────────────────────────────────
+app.get('/api/reports', withSupabase({ auth: 'none' }), async (req, res) => {
+  try {
+    const result = await fetch(`http://localhost:${process.env.PORT || 5001}/api/analytics/reports`);
+    const data = await result.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // WhatsApp API Routes
 app.get('/api/whatsapp/config', withSupabase({ auth: 'none' }), async (req, res) => {

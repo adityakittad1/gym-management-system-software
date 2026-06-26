@@ -448,7 +448,7 @@ export const api = {
     },
 
     admit: async (payload: { memberData: any, paymentData: any }) => {
-      const res = await fetch(`http://localhost:5000/api/admission/new`, {
+      const res = await fetch(`${API_BASE_URL}/api/admission/new`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
