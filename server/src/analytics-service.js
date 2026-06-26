@@ -21,18 +21,17 @@ router.get('/dashboard', withSupabase({ auth: 'none' }), async (req, res) => {
       else if (m.status === 'expiring') { activeMembers++; expiringSoon++; }
     });
 
-    // 2. Payments — column is `date` NOT `payment_date` (supabase_migration.sql v2)
-    //    Also apply deleted_at filter since payments table has this column.
+    // 2. Payments — column is `payment_date`, NOT `date`.
+    //    There is NO deleted_at column on payments in migration.sql.
     const { data: payments, error: pErr } = await supabaseAdmin
       .from('payments')
-      .select('status, amount, date')
-      .is('deleted_at', null);
+      .select('status, amount, payment_date');
     if (pErr) throw pErr;
 
     let monthlyRevenue = 0, pendingPayments = 0;
     (payments || []).forEach(p => {
       const status = (p.status || '').toLowerCase();
-      const dateStr = (p.date || '').toString().slice(0, 7); // handles DATE and TIMESTAMPTZ
+      const dateStr = (p.payment_date || '').toString().slice(0, 7); // handles DATE and TIMESTAMPTZ
       if (status === 'paid' && dateStr === currentMonthStr) {
         monthlyRevenue += Number(p.amount) || 0;
       }
@@ -113,8 +112,7 @@ router.get('/insights', withSupabase({ auth: 'none' }), async (req, res) => {
       .select('status, plan');
     const { data: payments } = await supabaseAdmin
       .from('payments')
-      .select('amount, date, status')
-      .is('deleted_at', null);
+      .select('amount, payment_date, status');
 
     const totalMembers = (members || []).length;
     let activeMembers = 0, expiredMembers = 0, expiringMembers = 0;
@@ -139,7 +137,7 @@ router.get('/insights', withSupabase({ auth: 'none' }), async (req, res) => {
     const revByMonth = {};
     (payments || []).forEach(p => {
       if (p.status === 'paid') {
-        const m = (p.date || '').toString().slice(0, 7);
+        const m = (p.payment_date || '').toString().slice(0, 7);
         if (m) revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
       }
     });
@@ -154,7 +152,7 @@ router.get('/insights', withSupabase({ auth: 'none' }), async (req, res) => {
 
     const currentMonth = new Date().toISOString().slice(0, 7);
     const expectedMonthlyIncome = (payments || [])
-      .filter(p => p.status === 'paid' && (p.date || '').toString().startsWith(currentMonth))
+      .filter(p => p.status === 'paid' && (p.payment_date || '').toString().startsWith(currentMonth))
       .reduce((s, p) => s + Number(p.amount), 0);
 
     res.json({
@@ -171,10 +169,10 @@ router.get('/insights', withSupabase({ auth: 'none' }), async (req, res) => {
 router.get('/reports', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
     const [paymentsRes, attendanceRes, membersRes, expensesRes] = await Promise.all([
-      supabaseAdmin.from('payments').select('date, amount, status').is('deleted_at', null),
+      supabaseAdmin.from('payments').select('payment_date, amount, status'),
       supabaseAdmin.from('attendance').select('date, status'),
       supabaseAdmin.from('members_view').select('plan, status'),
-      supabaseAdmin.from('expenses').select('amount, expense_date').is('deleted_at', null),
+      supabaseAdmin.from('expenses').select('amount, expense_date'),
     ]);
 
     const payments = paymentsRes.data || [];
@@ -190,7 +188,7 @@ router.get('/reports', withSupabase({ auth: 'none' }), async (req, res) => {
     const expByMonth = {};
 
     payments.filter(p => p.status === 'paid').forEach(p => {
-      const m = (p.date || '').toString().slice(0, 7);
+      const m = (p.payment_date || '').toString().slice(0, 7);
       if (m) revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
     });
 
@@ -244,8 +242,8 @@ router.get('/expenses', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
     const currentMonth = new Date().toISOString().slice(0, 7);
     const [expensesRes, paymentsRes] = await Promise.all([
-      supabaseAdmin.from('expenses').select('amount, expense_date, category').is('deleted_at', null),
-      supabaseAdmin.from('payments').select('amount, date, status').is('deleted_at', null),
+      supabaseAdmin.from('expenses').select('amount, expense_date, category'),
+      supabaseAdmin.from('payments').select('amount, payment_date, status'),
     ]);
 
     const expenses = expensesRes.data || [];

@@ -230,7 +230,7 @@ app.get('/api/coaches', withSupabase({ auth: 'none' }), async (req, res) => {
 app.get('/api/business-insights', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
     const { data: members } = await supabaseAdmin.from('members_view').select('status, plan');
-    const { data: payments } = await supabaseAdmin.from('payments').select('amount, date, status').is('deleted_at', null);
+    const { data: payments } = await supabaseAdmin.from('payments').select('amount, payment_date, status');
 
     const totalMembers = (members || []).length;
     let activeMembers = 0, expiredMembers = 0, expiringMembers = 0;
@@ -250,7 +250,7 @@ app.get('/api/business-insights', withSupabase({ auth: 'none' }), async (req, re
     const revByMonth = {};
     (payments || []).forEach(p => {
       if (p.status === 'paid') {
-        const m = (p.date || '').toString().slice(0, 7);
+        const m = (p.payment_date || '').toString().slice(0, 7);
         if (m) revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
       }
     });
@@ -259,7 +259,7 @@ app.get('/api/business-insights', withSupabase({ auth: 'none' }), async (req, re
 
     const currentMonth = new Date().toISOString().slice(0, 7);
     const expectedMonthlyIncome = (payments || [])
-      .filter(p => p.status === 'paid' && (p.date || '').toString().startsWith(currentMonth))
+      .filter(p => p.status === 'paid' && (p.payment_date || '').toString().startsWith(currentMonth))
       .reduce((s, p) => s + Number(p.amount), 0);
 
     res.json({ totalMembers, activeMembers, expiredMembers, expiringMembers, retentionRate, renewalRate, inactiveMembers: expiredMembers, topPlans, revenueTrend, expectedMonthlyIncome });
@@ -275,10 +275,10 @@ app.get('/api/reports', withSupabase({ auth: 'none' }), async (req, res) => {
   // Reuse the analytics router by calling Supabase directly
   try {
     const [paymentsRes, attendanceRes, membersRes, expensesRes] = await Promise.all([
-      supabaseAdmin.from('payments').select('date, amount, status').is('deleted_at', null),
+      supabaseAdmin.from('payments').select('payment_date, amount, status'),
       supabaseAdmin.from('attendance').select('date, status'),
       supabaseAdmin.from('members_view').select('plan, status'),
-      supabaseAdmin.from('expenses').select('amount, expense_date').is('deleted_at', null),
+      supabaseAdmin.from('expenses').select('amount, expense_date'),
     ]);
     const payments = paymentsRes.data || [];
     const attendance = attendanceRes.data || [];
@@ -291,7 +291,7 @@ app.get('/api/reports', withSupabase({ auth: 'none' }), async (req, res) => {
 
     const revByMonth = {};
     payments.filter(p => p.status === 'paid').forEach(p => {
-      const m = (p.date || '').toString().slice(0, 7);
+      const m = (p.payment_date || '').toString().slice(0, 7);
       if (m) revByMonth[m] = (revByMonth[m] || 0) + Number(p.amount);
     });
 

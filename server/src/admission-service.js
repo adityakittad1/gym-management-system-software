@@ -6,7 +6,7 @@ const router = express.Router();
  * POST /api/admission/new
  * Admits a new gym member atomically:
  *   1. Insert into members table
- *   2. Insert into payments table (using 'date' not 'payment_date')
+ *   2. Insert into payments table (using 'payment_date' and 'plan_type')
  *   3. Fire secondary hooks (activities, notifications, WhatsApp)
  */
 router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
@@ -65,12 +65,12 @@ router.post('/new', withSupabase({ auth: 'none' }), async (req, res) => {
     const memberId = member.id;
 
     // ── STEP 2: Insert Payment ─────────────────────────────────────────────────
-    // IMPORTANT: payments table uses 'date' NOT 'payment_date' (supabase_migration.sql v2)
+    // IMPORTANT: payments table uses 'payment_date' and 'plan_type' in migration.sql
     const paymentInsert = {
       member_id:    memberId,
       amount:       Number(paymentData.amount) || 0,
-      plan:         paymentData.plan || memberData.plan,
-      date:         paymentData.date || new Date().toISOString().split('T')[0],
+      plan_type:    paymentData.plan || memberData.plan,
+      payment_date: paymentData.date || new Date().toISOString().split('T')[0],
       method:       paymentData.method || paymentData.paymentMethod || 'Cash',
       status:       paymentData.status || 'paid',
       notes:        paymentData.notes || null,
