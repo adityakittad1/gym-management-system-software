@@ -192,7 +192,16 @@ async function initialize(socketIO, throwOnError = false) {
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
-        '--single-process'
+        '--single-process',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--safebrowsing-disable-auto-update'
       ],
     },
     webVersionCache: {
