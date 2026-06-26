@@ -159,6 +159,16 @@ async function initialize(socketIO, throwOnError = false) {
 
   // Use standard Puppeteer bundled Chromium (executes from disk, saving ~150MB RAM compared to Sparticuz tmpfs extraction)
   const puppeteer = require('puppeteer');
+  
+  // Force install chrome at runtime to bypass Render build cache bugs
+  const { execSync } = require('child_process');
+  console.log('[Diagnostic] Force installing Chrome at runtime...');
+  try {
+    execSync('npx puppeteer browsers install chrome', { stdio: 'inherit', cwd: __dirname });
+  } catch (e) {
+    console.error('[Diagnostic] Error installing Chrome:', e.message);
+  }
+
   let executablePath = puppeteer.executablePath();
   
   // Inject our aggressive memory limiters
