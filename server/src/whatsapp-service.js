@@ -152,7 +152,24 @@ async function initialize(socketIO, throwOnError = false) {
       if (fs.existsSync(renderCachePath)) {
         const versions = fs.readdirSync(renderCachePath).filter(v => !v.startsWith('.'));
         for (const version of versions) {
-          const chromeBin = path.join(renderCachePath, version, 'chrome-linux64', 'chrome');
+          const versionDir = path.join(renderCachePath, version);
+          const chromeBin = path.join(versionDir, 'chrome-linux64', 'chrome');
+          
+          if (!fs.existsSync(chromeBin)) {
+            // Find the zip file
+            const zipFiles = fs.readdirSync(versionDir).filter(f => f.endsWith('.zip'));
+            if (zipFiles.length > 0) {
+              const zipPath = path.join(versionDir, zipFiles[0]);
+              console.log('[WhatsApp] Chrome binary missing. Manually unzipping:', zipPath);
+              try {
+                require('child_process').execSync(`unzip -q -o "${zipPath}" -d "${versionDir}"`);
+                console.log('[WhatsApp] Unzip complete.');
+              } catch (e) {
+                console.error('[WhatsApp] Manual unzip failed:', e.message);
+              }
+            }
+          }
+
           if (fs.existsSync(chromeBin)) {
             try {
               require('child_process').execSync(`chmod +x "${chromeBin}"`);
