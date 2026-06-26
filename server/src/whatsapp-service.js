@@ -144,22 +144,31 @@ async function initialize(socketIO, throwOnError = false) {
   persistSessionStatus({ qr_code: null });
   broadcastStatus();
 
-  // Use serverless-optimized chromium
-  let executablePath;
+  // Aggressive memory optimizations for Render 512MB RAM Limit
   let args = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--single-process',
-    '--disable-gpu',
-    '--no-zygote',
     '--disable-dev-shm-usage',
-    '--disable-accelerated-2d-canvas'
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-gpu',
+    '--blink-settings=imagesEnabled=false',
+    '--js-flags="--max-old-space-size=120"'
   ];
 
   try {
     const chromium = require('@sparticuz/chromium');
     executablePath = await chromium.executablePath();
-    args = chromium.args;
+    
+    // Sparticuz args contain --single-process which crashes the browser on memory spikes. 
+    // We filter it out and inject our aggressive memory limiters.
+    const baseArgs = chromium.args || [];
+    args = baseArgs.filter(a => !a.includes('single-process')).concat([
+      '--blink-settings=imagesEnabled=false',
+      '--js-flags="--max-old-space-size=120"'
+    ]);
+    
     console.log('[WhatsApp] Using @sparticuz/chromium at:', executablePath);
   } catch (e) {
     console.log('[WhatsApp] @sparticuz/chromium not found, falling back to default...');
@@ -179,7 +188,7 @@ async function initialize(socketIO, throwOnError = false) {
       args: args
     },
     webVersionCache: {
-      type: 'none',
+      type: 'local',
     },
   });
 
