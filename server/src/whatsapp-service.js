@@ -158,7 +158,8 @@ async function initialize(socketIO, throwOnError = false) {
   ];
 
   // Use standard Puppeteer bundled Chromium (executes from disk, saving ~150MB RAM compared to Sparticuz tmpfs extraction)
-  let executablePath = undefined;
+  const puppeteer = require('puppeteer');
+  let executablePath = puppeteer.executablePath();
   
   // Inject our aggressive memory limiters
   args = args.concat([
