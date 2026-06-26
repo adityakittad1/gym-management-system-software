@@ -5,8 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
-    "postinstall": "rm -rf /opt/render/.cache/puppeteer && rm -rf /opt/render/project/puppeteer && node node_modules/puppeteer/install.mjs"
+    "dev": "nodemon src/index.js"
   },
   "engines": {
     "node": ">=18"
