@@ -424,6 +424,101 @@ app.get('/api/whatsapp/last-error', (req, res) => {
   res.json({ lastError: global.whatsappLastError || 'No error recorded.' });
 });
 
+app.get('/api/whatsapp/diagnostic', async (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  const { execSync } = require('child_process');
+  
+  const report = {};
+  
+  try {
+    report.nodeVersion = process.version;
+    
+    try {
+      report.puppeteerVersion = require('puppeteer/package.json').version;
+    } catch(e) { report.puppeteerVersion = e.message; }
+    
+    try {
+      report.whatsappWebJsVersion = require('whatsapp-web.js/package.json').version;
+    } catch(e) { report.whatsappWebJsVersion = e.message; }
+    
+    let resolvedPath = null;
+    let manualFinds = [];
+    const renderCachePath = '/opt/render/project/puppeteer/chrome';
+    if (fs.existsSync(renderCachePath)) {
+      const versions = fs.readdirSync(renderCachePath);
+      for (const version of versions) {
+        const p = path.join(renderCachePath, version, 'chrome-linux64', 'chrome');
+        if (fs.existsSync(p)) manualFinds.push(p);
+      }
+    }
+    report.manualSearchFound = manualFinds;
+    
+    let defaultPupPath = null;
+    try {
+      const pup = require('puppeteer');
+      defaultPupPath = pup.executablePath();
+    } catch(e) { defaultPupPath = e.message; }
+    report.defaultPuppeteerPath = defaultPupPath;
+    
+    const executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || manualFinds[0] || defaultPupPath;
+    report.usedExecutablePath = executablePath;
+    
+    report.exists = false;
+    if (executablePath && typeof executablePath === 'string') {
+      try {
+        report.exists = fs.existsSync(executablePath);
+      } catch(e) { report.exists = e.message; }
+      
+      report.permissions = 'unknown';
+      try {
+        fs.accessSync(executablePath, fs.constants.X_OK);
+        report.permissions = 'executable';
+      } catch (e) {
+        report.permissions = e.message;
+      }
+      
+      report.directExecution = 'skipped';
+      try {
+        const out = execSync(`"${executablePath}" --version`, { stdio: 'pipe' }).toString();
+        report.directExecution = out.trim();
+      } catch(e) {
+        report.directExecution = {
+          message: e.message,
+          stdout: e.stdout ? e.stdout.toString() : '',
+          stderr: e.stderr ? e.stderr.toString() : ''
+        };
+      }
+    }
+    
+    report.puppeteerLaunch = 'skipped';
+    if (report.exists === true && report.permissions === 'executable') {
+      try {
+        const pup = require('puppeteer');
+        const browser = await pup.launch({
+          headless: true,
+          executablePath: executablePath,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--single-process', '--disable-gpu']
+        });
+        const page = await browser.newPage();
+        await page.goto('about:blank');
+        await page.close();
+        await browser.close();
+        report.puppeteerLaunch = 'Success';
+      } catch(e) {
+        report.puppeteerLaunch = {
+          message: e.message,
+          stack: e.stack
+        };
+      }
+    }
+
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ fatal: err.message, stack: err.stack, partialReport: report });
+  }
+});
+
 app.post('/api/whatsapp/pairing-code', withSupabase({ auth: 'none' }), async (req, res) => {
   try {
     const { phone } = req.body;
