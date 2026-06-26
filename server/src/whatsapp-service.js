@@ -147,7 +147,9 @@ async function initialize(socketIO, throwOnError = false) {
     '--disable-setuid-sandbox',
     '--single-process',
     '--disable-gpu',
-    '--no-zygote'
+    '--no-zygote',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas'
   ];
 
   try {
