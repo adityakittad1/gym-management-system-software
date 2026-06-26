@@ -454,11 +454,19 @@ app.get('/api/whatsapp/diagnostic', async (req, res) => {
       report.whatsappVersion = require('whatsapp-web.js/package.json').version;
     } catch(e) { report.whatsappVersion = e.message; }
     
+    // Advanced Diagnostic
+    try {
+      report.serverDirList = execSync('ls -la /opt/render/project/src/server', { stdio: 'pipe' }).toString().trim();
+      report.cacheDirList = execSync('ls -la /opt/render/project/src/server/puppeteer-browsers 2>/dev/null || echo "MISSING"', { stdio: 'pipe' }).toString().trim();
+    } catch(e) {
+      report.serverDirList = e.message;
+    }
+
     // Find Chrome using native find command to eliminate all guessing
     let foundChrome = null;
     try {
       // Search in project root and .cache
-      const findCmd = `find /opt/render/project -type f -name "chrome" -executable 2>/dev/null | head -n 1`;
+      const findCmd = `find /opt/render/project -type f -executable 2>/dev/null | grep -i chrome | head -n 1`;
       const out = execSync(findCmd, { stdio: 'pipe' }).toString().trim();
       if (out) {
         foundChrome = out;
