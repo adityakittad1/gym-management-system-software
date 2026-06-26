@@ -159,7 +159,7 @@ async function initialize(socketIO, throwOnError = false) {
     console.log('[WhatsApp] @sparticuz/chromium not found, falling back to default...');
   }
 
-  const client = new Client({
+  client = new Client({
     authStrategy: new LocalAuth({
       clientId: 'primary',
       dataPath: path.join(__dirname, '.wwebjs_auth')
